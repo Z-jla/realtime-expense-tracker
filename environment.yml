@@ -1,0 +1,6 @@
+name: spend-app
+channels:
+  - conda-forge
+dependencies:
+  - nodejs=24
+  - openjdk=21
