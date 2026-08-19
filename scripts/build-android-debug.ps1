@@ -22,3 +22,6 @@ $env:PATH = "$env:JAVA_HOME\bin;$env:ANDROID_HOME\cmdline-tools\latest\bin;$env:
 
 Set-Location (Join-Path $PSScriptRoot '..\android')
 .\gradlew.bat assembleDebug --no-daemon --stacktrace --info --console=plain
+if ($LASTEXITCODE -ne 0) {
+  exit $LASTEXITCODE
+}

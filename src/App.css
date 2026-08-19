@@ -141,6 +141,7 @@ button {
 }
 
 .capture-panel,
+.ocr-batch-panel,
 .entry-form,
 .stats-section,
 .records-section,
@@ -182,6 +183,22 @@ button {
   color: #64748b;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.ocr-engine-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ocr-engine-meta span {
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #0f766e;
+  background: #e7f8f3;
+  font-size: 11px;
+  font-weight: 850;
 }
 
 .hidden-input {
@@ -229,6 +246,13 @@ button {
   box-shadow: 0 12px 24px rgba(15, 118, 110, 0.2);
 }
 
+.primary-action:disabled,
+.secondary-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .secondary-action {
   border: 1px solid #c7d4e2;
   color: #184e77;
@@ -240,6 +264,70 @@ button {
   gap: 12px;
   margin-bottom: 12px;
   padding: 15px;
+}
+
+.ocr-batch-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 15px;
+}
+
+.ocr-batch-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ocr-batch-list li {
+  border: 1px solid #e4ebf2;
+  border-radius: 8px;
+  background: #f9fbfd;
+}
+
+.ocr-batch-list label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 9px 10px;
+  cursor: pointer;
+}
+
+.ocr-batch-list input {
+  width: 18px;
+  height: 18px;
+  accent-color: #0f766e;
+}
+
+.ocr-batch-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ocr-batch-copy strong {
+  overflow: hidden;
+  color: #172033;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ocr-batch-copy small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.ocr-batch-amount {
+  color: #b42318;
+  font-size: 15px;
+  white-space: nowrap;
 }
 
 .form-heading,

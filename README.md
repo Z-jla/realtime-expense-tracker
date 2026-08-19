@@ -5,11 +5,13 @@
 ## 功能
 
 - 手动记账：金额、分类、日期、备注、支付方式。
-- 截图识别：从相册选择截图或拍照，浏览器端 OCR 识别金额后自动入账。
-- 账单列表识别优化：对微信账单列表会优先取支出明细，忽略收入、退款和月度汇总。
+- 智能识图：Android 使用离线 PP-OCRv6 tiny，Web/PWA 使用 Tesseract.js 兼容引擎。
+- 坐标化解析：结合文字框位置、识别置信度和“实付/合计”等语义锚点提取金额。
+- 安全入账：高置信度支出自动记录；金额冲突、收入、退款和低置信度结果先进入人工确认。
+- 账单列表：一次识别多笔支出，过滤收入和退款后支持勾选批量入账。
 - 本地保存：数据保存在浏览器或 Android WebView 的 `localStorage`。
 - 统计看板：今日支出、本月支出、日均、分类占比、最近记录。
-- 离线 OCR：APK 内置 Tesseract worker、wasm 和语言模型，首次识别无需联网下载模型。
+- 离线 OCR：APK 内置 PP-OCRv6 ONNX 模型及 Tesseract 兼容资源，首次识别无需下载模型。
 - PWA 支持：网页端可添加到手机主屏幕。
 
 ## 技术栈
@@ -18,6 +20,9 @@
 - TypeScript
 - Vite
 - Tesseract.js
+- PaddleOCR PP-OCRv6 tiny
+- ONNX Runtime Android
+- OpenCV Android
 - Capacitor Android
 - vite-plugin-pwa
 - oxlint
@@ -27,6 +32,7 @@
 ```text
 .
 ├── android/              # Capacitor Android 工程
+│   └── ppocr-sdk/        # 固定版本的 PaddleOCR Android SDK 与离线模型
 ├── public/               # 静态资源和离线 OCR 资源
 │   └── tesseract/
 ├── scripts/              # 打包与 OCR 调试脚本
@@ -79,6 +85,7 @@ conda run -n spend-app npm run build
 1. 安装 Android SDK。
 2. 设置环境变量 `ANDROID_HOME` 或 `ANDROID_SDK_ROOT` 指向 Android SDK 目录。
 3. 确保当前环境能使用 JDK 21。
+4. 目标设备为 Android 8.0（API 26）或更高版本。
 
 同步 Android 工程并构建 debug APK：
 
@@ -99,10 +106,16 @@ debug APK 可以直接安装到 Android 手机。安装时如果系统提示未�
 
 ## OCR 调试
 
-可以用本地脚本查看截图 OCR 文本和金额候选：
+运行字段解析回归测试：
 
 ```powershell
-conda run -n spend-app node scripts/probe-ocr.mjs "C:\path\to\screenshot.jpg" chi_sim
+conda run -n spend-app npm run test:ocr
+```
+
+可以用本地脚本查看截图的文字框、置信度和结构化交易候选：
+
+```powershell
+conda run -n spend-app node scripts/probe-ocr.mjs "C:\path\to\screenshot.jpg" chi_sim+eng
 ```
 
 ## 数据说明
@@ -114,7 +127,7 @@ conda run -n spend-app node scripts/probe-ocr.mjs "C:\path\to\screenshot.jpg" ch
 ## 开源前注意
 
 - 不要提交 `node_modules/`、`dist/`、Android 构建产物、APK、日志文件和本机 Android SDK 路径。
-- `public/tesseract/` 内的 OCR 资源体积较大，保留它可以让 APK 离线识别；如果希望仓库更小，可以改为首次运行从网络加载模型。
+- `android/ppocr-sdk/` 固定到 PaddleOCR 上游提交并内置 PP-OCRv6 tiny 模型；`public/tesseract/` 是 Web/PWA 与原生异常时的离线降级资源。
 - 正式发布到应用商店前，应配置 release 签名、版本号、隐私政策和更完整的备份/导出策略。
 
 ## License

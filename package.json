@@ -19,6 +19,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test:ocr": "node --test scripts/ocr-parser.test.mjs",
     "preview": "vite preview",
     "android:sync": "npm run build && cap sync android",
     "android:debug": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android-debug.ps1",

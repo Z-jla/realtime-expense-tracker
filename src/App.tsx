@@ -13,6 +13,9 @@ import {
 } from 'lucide-react'
 import { type ChangeEvent, type FormEvent, useMemo, useRef, useState } from 'react'
 import './App.css'
+import { formatOcrReview, normalizeOcrText, parseOcrDocument } from './ocr/parser.ts'
+import { recognizeExpenseImage } from './ocr/recognize.ts'
+import type { OcrDocument, ParsedTransaction } from './ocr/types.ts'
 
 type Expense = {
   id: string
@@ -39,6 +42,12 @@ type OcrState = {
   message: string
   progress: number
   rawText: string
+  engine?: string
+  confidence?: number
+}
+
+type BatchCandidate = ParsedTransaction & {
+  selected: boolean
 }
 
 const STORAGE_KEY = 'spend-app-expenses-v1'
@@ -120,232 +129,8 @@ function saveExpenses(nextExpenses: Expense[]) {
   }
 }
 
-function normalizeText(text: string) {
-  const fullWidthDigits = '０１２３４５６７８９'
-  return text
-    .replace(/[０-９]/g, (char) => String(fullWidthDigits.indexOf(char)))
-    .replace(/[，]/g, ',')
-    .replace(/[。]/g, '.')
-    .replace(/[￥]/g, '¥')
-    .replace(/[−–—]/g, '-')
-    .replace(/(^|\s)一\s*(?=\d)/g, '$1-')
-}
-
-function cleanOcrReviewLines(text: string) {
-  const seen = new Set<string>()
-  return normalizeText(text)
-    .split(/\r?\n/)
-    .map((line) =>
-      line
-        .replace(/[^\u4e00-\u9fa5a-zA-Z0-9¥￥.,:：+\-/%()（）【】#·\s]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim(),
-    )
-    .filter((line) => {
-      if (!line) return false
-      const readableCount = line.replace(/\s/g, '').match(/[\u4e00-\u9fa5a-zA-Z0-9]/g)?.length ?? 0
-      if (readableCount === 0) return false
-      if (line.length <= 2 && readableCount < line.length) return false
-      if (seen.has(line)) return false
-      seen.add(line)
-      return true
-    })
-}
-
-function formatOcrReviewText(focusedText: string, fullText: string) {
-  const sections: string[] = []
-  const focusedLines = cleanOcrReviewLines(focusedText)
-  const fullLines = cleanOcrReviewLines(fullText)
-
-  if (focusedLines.length > 0) {
-    sections.push(['【金额区域】', ...focusedLines].join('\n'))
-  }
-
-  if (fullLines.length > 0) {
-    sections.push(['【整张截图】', ...fullLines].join('\n'))
-  }
-
-  return sections.join('\n\n') || '没有识别到可展示的文字'
-}
-
-function isBillListText(rawText: string) {
-  const text = normalizeText(rawText)
-  const hasBillListUi = /(账单|全部账单|查找交易|收支统计|交易记录|月账单)/.test(text)
-  const hasMonthSummary = /支出\s*[¥￥]?\s*\d{1,6}(?:[,.]\d{1,2})?.{0,24}收入\s*[¥￥]?\s*\d{1,6}/s.test(
-    text,
-  )
-  const signedAmountCount = text.match(/[+-]\s*\d{1,6}(?:[,.]\d{1,2})/g)?.length ?? 0
-
-  return (hasBillListUi && (hasMonthSummary || signedAmountCount >= 2)) || signedAmountCount >= 4
-}
-
-function getBillListExpenseLines(rawText: string) {
-  if (!isBillListText(rawText)) return []
-
-  return normalizeText(rawText)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => {
-      if (!line) return false
-      if (/支出.{0,24}收入|收入.{0,24}支出|收支统计|全部账单|查找交易/.test(line)) {
-        return false
-      }
-      if (/[+]\s*\d{1,6}(?:[,.]\d{1,2})/.test(line)) return false
-      if (/(来自|收入|到账|退款|退回|余额|红包|优惠)/.test(line)) return false
-      return /-\s*\d{1,6}(?:[,.]\d{1,2})/.test(line)
-    })
-}
-
 function parseAmountInput(value: string) {
-  return Number(normalizeText(value).replace(',', '.').trim())
-}
-
-function extractAmount(rawText: string) {
-  const text = normalizeText(rawText)
-  const firstBillExpenseLine = getBillListExpenseLines(text)[0]
-
-  if (firstBillExpenseLine) {
-    const expenseMatch = firstBillExpenseLine.match(/-\s*(\d{1,6}(?:[,.]\d{1,2})?)/)
-    const value = expenseMatch ? Number(expenseMatch[1].replace(',', '.')) : null
-    if (value && Number.isFinite(value) && value > 0) return value
-  }
-
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-
-  const candidates: Array<{ value: number; score: number }> = []
-  const amountPattern = /(?:¥|￥|rmb|cny)?\s*([+-]?\d{1,6}(?:[,.]\d{1,2})?)/gi
-
-  for (const line of lines) {
-    const lower = line.toLowerCase()
-    const hasMoneyContext = /(支付|付款|消费|支出|实付|合计|金额|订单|交易|收款|转账)/.test(line)
-    const isNegativeContext = /(退款|退回|收入|到账|余额|优惠|红包|积分)/.test(line)
-    const hasCurrency = /[¥￥]|rmb|cny/i.test(line)
-    const isUiNoise = /(:|\bkb\/s\b|\b5g\b|\b4g\b|删除|编辑|记录时间|来源)/i.test(line)
-    let match: RegExpExecArray | null
-
-    while ((match = amountPattern.exec(lower)) !== null) {
-      const rawMatch = match[1]
-      const around = line.slice(Math.max(0, match.index - 8), match.index + match[0].length + 8)
-      const hasStrongExpenseAround = /(支付|付款|消费|支出|实付|合计|转账)/.test(around)
-      const hasWeakExpenseAround = /(订单|交易|金额)/.test(around)
-      const hasNegativeAround = /(退款|退回|收入|到账|余额|优惠|红包|积分)/.test(around)
-      const hasDecimal = /[,.]\d{1,2}$/.test(rawMatch)
-      const hasSign = /^[+-]/.test(rawMatch)
-      const lineOnlyAmount = /^[+-]?\s*(?:¥\s*)?\d{1,6}(?:[,.]\d{1,2})?$/.test(
-        line.replace(/\s+/g, ''),
-      )
-
-      if ((hasNegativeAround || isNegativeContext) && !hasStrongExpenseAround && !lineOnlyAmount) {
-        continue
-      }
-      if (!hasDecimal && !hasCurrency && !hasMoneyContext && !hasSign) continue
-
-      const value = Number(rawMatch.replace(',', '.').replace(/[+-]/g, ''))
-      if (!Number.isFinite(value) || value <= 0 || value > 100000) continue
-      if (/^(19|20)\d{2}$/.test(String(Math.trunc(value)))) continue
-
-      let score = 0
-      if (hasDecimal) score += 70
-      if (lineOnlyAmount) score += 70
-      if (hasCurrency) score += 70
-      if (hasStrongExpenseAround) score += 90
-      else if (hasWeakExpenseAround) score += 30
-      else if (hasMoneyContext) score += 10
-      if (hasSign) score += 40
-      if (hasNegativeAround) score -= hasStrongExpenseAround ? 40 : 90
-      if (value >= 1 && value <= 2000) score += 15
-      if (isUiNoise && !hasDecimal && !hasCurrency && !hasMoneyContext) score -= 80
-      candidates.push({ value, score })
-    }
-  }
-
-  const best = candidates.sort((a, b) => b.score - a.score)[0]
-  return best && best.score >= 45 ? best.value : null
-}
-
-function extractDate(rawText: string) {
-  const text = normalizeText(rawText)
-  const dateMatch =
-    text.match(/(20\d{2})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})/) ??
-    text.match(/(\d{1,2})\s*[-/.月]\s*(\d{1,2})日?/)
-
-  if (!dateMatch) return today()
-
-  const now = new Date()
-  const year = dateMatch.length === 4 ? Number(dateMatch[1]) : now.getFullYear()
-  const month = Number(dateMatch.length === 4 ? dateMatch[2] : dateMatch[1])
-  const day = Number(dateMatch.length === 4 ? dateMatch[3] : dateMatch[2])
-
-  if (month < 1 || month > 12 || day < 1 || day > 31) return today()
-
-  const parsed = new Date(year, month - 1, day)
-
-  if (
-    Number.isNaN(parsed.getTime()) ||
-    parsed.getFullYear() !== year ||
-    parsed.getMonth() !== month - 1 ||
-    parsed.getDate() !== day
-  ) {
-    return today()
-  }
-  return formatLocalDate(parsed)
-}
-
-function inferCategory(rawText: string) {
-  const text = (getBillListExpenseLines(rawText)[0] ?? rawText).toLowerCase()
-  const rules: Array<[string, RegExp]> = [
-    ['餐饮', /(餐|饭|外卖|美团|饿了么|咖啡|奶茶|食|麦当劳|肯德基|瑞幸|星巴克)/],
-    ['交通', /(地铁|公交|滴滴|打车|高德|铁路|机票|停车|加油|高速)/],
-    ['购物', /(淘宝|天猫|京东|拼多多|抖音商城|购物|超市|便利店|盒马|山姆)/],
-    ['转账', /(转账|转给|转 给|收款|付款码)/],
-    ['娱乐', /(电影|游戏|会员|ktv|演出|音乐|视频|剧院)/],
-    ['医疗', /(医院|药|医疗|挂号|诊所|体检)/],
-    ['住房', /(房租|物业|水费|电费|燃气|宽带)/],
-  ]
-  return rules.find(([, pattern]) => pattern.test(text))?.[0] ?? '其他'
-}
-
-function extractNote(rawText: string) {
-  const firstBillExpenseLine = getBillListExpenseLines(rawText)[0]
-  if (firstBillExpenseLine) {
-    return (
-      firstBillExpenseLine
-        .replace(/[-+]\s*\d{1,6}(?:[,.]\d{1,2})\s*$/, '')
-        .replace(/^\S\s+/, '')
-        .replace(/\s+/g, '')
-        .trim() || '账单截图'
-    )
-  }
-
-  const lines = rawText
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-
-  const remark = lines.find((line) => /备注|转账|转给|转 给|商户|商品/.test(line))
-  if (remark) return remark.replace(/^备注\s*/, '').trim() || '截图识别'
-
-  return (
-    lines.find(
-      (line) =>
-        line.length > 2 &&
-        !/^[+-]?\s*(?:¥\s*)?\d{1,6}(?:[,.]\d{1,2})?$/.test(normalizeText(line)) &&
-        !/^\d{1,2}[:：]\d{1,2}/.test(line),
-    ) ?? '截图识别'
-  )
-}
-
-function inferPaymentMethod(rawText: string) {
-  if (/微信|wechat/i.test(rawText)) return '微信'
-  if (/支付宝|alipay/i.test(rawText)) return '支付宝'
-  if (/银行卡|银行|信用卡|储蓄卡|云闪付/i.test(rawText)) return '银行卡'
-  if (isBillListText(rawText) && /(群收款|收支统计|全部账单|查找交易|转账)/.test(rawText)) {
-    return '微信'
-  }
-  return '其他'
+  return Number(normalizeOcrText(value).replace(',', '.').trim())
 }
 
 function createExpense(draft: Draft, source: Expense['source'], rawText?: string): Expense {
@@ -362,110 +147,30 @@ function createExpense(draft: Draft, source: Expense['source'], rawText?: string
   }
 }
 
-async function createFocusedAmountImage(file: File) {
-  const bitmap = await createImageBitmap(file)
-  const crop = {
-    x: Math.round(bitmap.width * 0.26),
-    y: Math.round(bitmap.height * 0.18),
-    width: Math.round(bitmap.width * 0.52),
-    height: Math.round(bitmap.height * 0.16),
+function draftFromTransaction(transaction: ParsedTransaction): Draft {
+  return {
+    amount: transaction.amount?.toFixed(2) ?? '',
+    category: transaction.category,
+    date: transaction.date,
+    note: transaction.note,
+    paymentMethod: transaction.paymentMethod,
   }
-  const scale = 3
-  const canvas = document.createElement('canvas')
-  canvas.width = crop.width * scale
-  canvas.height = crop.height * scale
-  const context = canvas.getContext('2d', { willReadFrequently: true })
+}
 
-  if (!context) {
-    bitmap.close()
-    return null
-  }
+function normalizedNote(note: string) {
+  return note.replace(/\s+/g, '').replace(/截图识别|账单截图/g, '').toLowerCase()
+}
 
-  context.fillStyle = '#ffffff'
-  context.fillRect(0, 0, canvas.width, canvas.height)
-  context.drawImage(
-    bitmap,
-    crop.x,
-    crop.y,
-    crop.width,
-    crop.height,
-    0,
-    0,
-    canvas.width,
-    canvas.height,
+function isDuplicateDraft(draft: Draft, expenses: Expense[]) {
+  const amount = Number(draft.amount)
+  const note = normalizedNote(draft.note)
+  return expenses.some(
+    (expense) =>
+      Math.abs(expense.amount - amount) < 0.001 &&
+      expense.date === draft.date &&
+      expense.paymentMethod === draft.paymentMethod &&
+      normalizedNote(expense.note) === note,
   )
-  bitmap.close()
-
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
-  const { data } = imageData
-  for (let index = 0; index < data.length; index += 4) {
-    const gray = data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114
-    const value = gray < 175 ? 0 : 255
-    data[index] = value
-    data[index + 1] = value
-    data[index + 2] = value
-  }
-  context.putImageData(imageData, 0, 0)
-
-  return new Promise<Blob | null>((resolve) => {
-    canvas.toBlob((blob) => resolve(blob), 'image/png')
-  })
-}
-
-const TESSERACT_LOCAL_OPTIONS = {
-  // worker 脚本、wasm core、语言模型都指向打包进应用的本地资源，
-  // 这样在 APK 里首次识别也无需联网下载，可离线使用。
-  workerPath: '/tesseract/worker.min.js',
-  corePath: '/tesseract/',
-  langPath: '/tesseract/',
-  gzip: false,
-}
-
-type TesseractWorker = Awaited<ReturnType<typeof import('tesseract.js').createWorker>>
-
-// 常驻复用的 worker：避免每次识别都重建 worker、重新加载 wasm 与语言模型。
-// 失败时把缓存的 promise 清空，允许下次重建。
-let fullWorkerPromise: Promise<TesseractWorker> | null = null
-let focusedWorkerPromise: Promise<TesseractWorker> | null = null
-let onFullProgress: ((progress: number) => void) | null = null
-let onFocusedProgress: ((progress: number) => void) | null = null
-
-function getFullWorker() {
-  if (!fullWorkerPromise) {
-    fullWorkerPromise = import('tesseract.js')
-      .then((mod) =>
-        mod.createWorker('chi_sim', undefined, {
-          ...TESSERACT_LOCAL_OPTIONS,
-          logger: (message) => {
-            if (message.status === 'recognizing text') onFullProgress?.(message.progress)
-          },
-        }),
-      )
-      .catch((error) => {
-        fullWorkerPromise = null
-        throw error
-      })
-  }
-  return fullWorkerPromise
-}
-
-function getFocusedWorker() {
-  if (!focusedWorkerPromise) {
-    focusedWorkerPromise = import('tesseract.js')
-      .then((mod) =>
-        mod.createWorker('eng', undefined, {
-          ...TESSERACT_LOCAL_OPTIONS,
-          logger: (message) => {
-            if (message.status === 'recognizing text') onFocusedProgress?.(message.progress)
-          },
-        }),
-      )
-      .catch((error) => {
-        focusedWorkerPromise = null
-        throw error
-      })
-  }
-  return focusedWorkerPromise
 }
 
 function App() {
@@ -478,13 +183,17 @@ function App() {
   >(null)
   const [ocr, setOcr] = useState<OcrState>({
     status: 'idle',
-    message: '上传微信、支付宝、银行卡消费截图，识别到金额后会自动入账。',
+    message: '上传支付截图或购物小票，高置信度结果会自动入账，其余先请你确认。',
     progress: 0,
     rawText: '',
   })
+  const [ocrBatch, setOcrBatch] = useState<BatchCandidate[]>([])
   const galleryInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
+  const expensesRef = useRef(expenses)
+  const pendingOcrTextRef = useRef<string | null>(null)
+  expensesRef.current = expenses
 
   const sortedExpenses = useMemo(
     () =>
@@ -515,6 +224,7 @@ function App() {
   const topCategory = categoryTotals[0]
 
   const persist = (nextExpenses: Expense[]) => {
+    expensesRef.current = nextExpenses
     setExpenses(nextExpenses)
     const ok = saveExpenses(nextExpenses)
     setStorageError(
@@ -532,6 +242,7 @@ function App() {
     event.preventDefault()
     const amount = parseAmountInput(draft.amount)
     if (!Number.isFinite(amount) || amount <= 0) return
+    const recognizedRawText = pendingOcrTextRef.current
 
     if (editingId) {
       persist(
@@ -550,10 +261,26 @@ function App() {
       )
       setEditingId(null)
     } else {
-      persist([createExpense({ ...draft, amount: amount.toFixed(2) }, 'manual'), ...expenses])
+      const source = recognizedRawText ? 'screenshot' : 'manual'
+      persist([
+        createExpense(
+          { ...draft, amount: amount.toFixed(2) },
+          source,
+          recognizedRawText ?? undefined,
+        ),
+        ...expenses,
+      ])
     }
 
+    pendingOcrTextRef.current = null
     setDraft(defaultDraft())
+    if (recognizedRawText) {
+      setOcr((current) => ({
+        ...current,
+        status: 'saved',
+        message: `已确认记录 ${moneyFormatter.format(amount)}。`,
+      }))
+    }
   }
 
   const deleteExpense = (id: string) => {
@@ -565,6 +292,7 @@ function App() {
   }
 
   const startEdit = (expense: Expense) => {
+    pendingOcrTextRef.current = null
     setEditingId(expense.id)
     setDraft({
       amount: expense.amount.toFixed(2),
@@ -576,41 +304,149 @@ function App() {
   }
 
   const cancelEdit = () => {
+    pendingOcrTextRef.current = null
     setEditingId(null)
     setDraft(defaultDraft())
   }
 
-  const applyOcrText = (rawText: string, reviewText = rawText) => {
-    const amount = extractAmount(rawText)
-    const nextDraft: Draft = {
-      amount: amount?.toFixed(2) ?? '',
-      category: inferCategory(rawText),
-      date: extractDate(rawText),
-      note: extractNote(rawText),
-      paymentMethod: inferPaymentMethod(rawText),
-    }
+  const applyOcrDocument = (document: OcrDocument) => {
+    const parsed = parseOcrDocument(document)
+    const reviewText = formatOcrReview(document, parsed)
+    pendingOcrTextRef.current = document.text
+    setEditingId(null)
 
-    setDraft(nextDraft)
-
-    if (!amount) {
+    if (parsed.isBillList && parsed.transactions.length > 1) {
+      setOcrBatch(parsed.transactions.map((transaction) => ({ ...transaction, selected: true })))
+      setDraft(defaultDraft())
       setOcr({
         status: 'needs-review',
-        message: '没有稳定识别到金额，已把识别文本放到下方，可手动补金额后保存。',
+        message: `识别到 ${parsed.transactions.length} 笔支出，请勾选后批量入账。`,
         progress: 1,
         rawText: reviewText,
+        engine: document.engine,
+        confidence: parsed.documentConfidence,
       })
       return
     }
 
-    const expense = createExpense(nextDraft, 'screenshot', rawText)
-    setEditingId(null)
-    persist([expense, ...expenses])
+    setOcrBatch([])
+    const transaction = parsed.transactions[0]
+    if (!transaction) {
+      setDraft(defaultDraft())
+      setOcr({
+        status: 'needs-review',
+        message: '没有识别到可用文字，请换一张更清晰、边缘完整的图片。',
+        progress: 1,
+        rawText: reviewText,
+        engine: document.engine,
+        confidence: parsed.documentConfidence,
+      })
+      return
+    }
+
+    const nextDraft = draftFromTransaction(transaction)
+    setDraft(nextDraft)
+    const autoSaveThreshold = document.engine === 'PP-OCRv6-tiny' ? 0.91 : 0.96
+    const canAutoSave =
+      transaction.amount !== null &&
+      transaction.direction === 'expense' &&
+      transaction.confidence >= autoSaveThreshold &&
+      transaction.warnings.length === 0
+
+    if (!transaction.amount) {
+      setOcr({
+        status: 'needs-review',
+        message: '没有稳定识别到金额，已填入其他字段，请手动补充后保存。',
+        progress: 1,
+        rawText: reviewText,
+        engine: document.engine,
+        confidence: transaction.confidence,
+      })
+      return
+    }
+
+    if (!canAutoSave) {
+      const warning = transaction.warnings[0]
+      setOcr({
+        status: 'needs-review',
+        message: warning
+          ? `识别到 ${moneyFormatter.format(transaction.amount)}，但${warning}，请确认后保存。`
+          : `识别到 ${moneyFormatter.format(transaction.amount)}，请确认商户和金额后保存。`,
+        progress: 1,
+        rawText: reviewText,
+        engine: document.engine,
+        confidence: transaction.confidence,
+      })
+      return
+    }
+
+    if (isDuplicateDraft(nextDraft, expensesRef.current)) {
+      setOcr({
+        status: 'needs-review',
+        message: `识别到 ${moneyFormatter.format(transaction.amount)}，但疑似已经入账，请确认是否重复。`,
+        progress: 1,
+        rawText: reviewText,
+        engine: document.engine,
+        confidence: transaction.confidence,
+      })
+      return
+    }
+
+    const expense = createExpense(nextDraft, 'screenshot', document.text)
+    persist([expense, ...expensesRef.current])
+    pendingOcrTextRef.current = null
+    setDraft(defaultDraft())
     setOcr({
       status: 'saved',
-      message: `已自动记录 ${moneyFormatter.format(amount)}，你可以在下方列表里编辑备注或删除。`,
+      message: `已用 ${document.engine} 自动记录 ${moneyFormatter.format(transaction.amount)}。`,
       progress: 1,
       rawText: reviewText,
+      engine: document.engine,
+      confidence: transaction.confidence,
     })
+  }
+
+  const toggleBatchCandidate = (index: number) => {
+    setOcrBatch((current) =>
+      current.map((candidate, candidateIndex) =>
+        candidateIndex === index ? { ...candidate, selected: !candidate.selected } : candidate,
+      ),
+    )
+  }
+
+  const confirmBatchCandidates = () => {
+    const selected = ocrBatch.filter(
+      (candidate): candidate is BatchCandidate & { amount: number } =>
+        candidate.selected && candidate.amount !== null,
+    )
+    const currentExpenses = [...expensesRef.current]
+    const added: Expense[] = []
+
+    for (const candidate of selected) {
+      const candidateDraft = draftFromTransaction(candidate)
+      if (isDuplicateDraft(candidateDraft, [...added, ...currentExpenses])) continue
+      added.push(
+        createExpense(candidateDraft, 'screenshot', pendingOcrTextRef.current ?? undefined),
+      )
+    }
+
+    if (added.length > 0) persist([...added, ...currentExpenses])
+    setOcrBatch([])
+    pendingOcrTextRef.current = null
+    setOcr((current) => ({
+      ...current,
+      status: added.length > 0 ? 'saved' : 'needs-review',
+      message:
+        added.length > 0
+          ? `已批量记录 ${added.length} 笔支出${added.length < selected.length ? '，重复项已跳过' : ''}。`
+          : '没有新增记录：未勾选项目或所选项目均已存在。',
+    }))
+  }
+
+  const dismissBatchCandidates = () => {
+    setOcrBatch([])
+    pendingOcrTextRef.current = null
+    setOcr((current) => ({ ...current, message: '已取消本次批量导入。' }))
   }
 
   const handleScreenshot = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -619,58 +455,23 @@ function App() {
 
     setOcr({
       status: 'reading',
-      message: '正在识别截图文字…',
+      message: '正在准备离线识别…',
       progress: 0.05,
       rawText: '',
     })
-
-    let focusedAmountImage: Blob | null = null
-    try {
-      focusedAmountImage = await createFocusedAmountImage(file)
-    } catch {
-      focusedAmountImage = null
-    }
-
-    // 全图识别占进度 70%、金额区复核占 30%（没有金额区时全图占满）。
-    // 两次识别在各自的 worker 上并行进行，所以进度按权重合并。
-    let fullProgress = 0
-    let focusedProgress = 0
-    const pushProgress = () => {
-      const combined = focusedAmountImage
-        ? fullProgress * 0.7 + focusedProgress * 0.3
-        : fullProgress
-      const value = 0.05 + combined * 0.95
-      setOcr((current) => ({
-        ...current,
-        progress: Math.max(current.progress, value),
-        message: `正在识别截图文字 ${Math.round(value * 100)}%`,
-      }))
-    }
-    onFullProgress = (progress) => {
-      fullProgress = progress
-      pushProgress()
-    }
-    onFocusedProgress = (progress) => {
-      focusedProgress = progress
-      pushProgress()
-    }
+    setOcrBatch([])
+    pendingOcrTextRef.current = null
 
     try {
-      const fullWorker = await getFullWorker()
-      const [fullResult, focusedResult] = await Promise.all([
-        fullWorker.recognize(file),
-        focusedAmountImage
-          ? getFocusedWorker().then((worker) => worker.recognize(focusedAmountImage as Blob))
-          : Promise.resolve(null),
-      ])
-
-      const fullText = fullResult.data.text
-      const focusedText = focusedResult?.data.text ?? ''
-      const shouldUseFocusedText = !isBillListText(fullText)
-      applyOcrText(
-        [shouldUseFocusedText ? focusedText : '', fullText].filter(Boolean).join('\n'),
-        formatOcrReviewText(shouldUseFocusedText ? focusedText : '', fullText),
-      )
+      const document = await recognizeExpenseImage(file, (progress, message) => {
+        setOcr((current) => ({
+          ...current,
+          status: 'reading',
+          progress: Math.max(current.progress, Math.min(0.98, progress)),
+          message,
+        }))
+      })
+      applyOcrDocument(document)
     } catch (error) {
       setOcr({
         status: 'error',
@@ -679,8 +480,6 @@ function App() {
         rawText: '',
       })
     } finally {
-      onFullProgress = null
-      onFocusedProgress = null
       event.target.value = ''
     }
   }
@@ -832,8 +631,16 @@ function App() {
             <ReceiptText size={22} />
           </span>
           <div>
-            <h2>截图自动入账</h2>
+            <h2>智能识图入账</h2>
             <p>{ocr.message}</p>
+            {ocr.engine && ocr.status !== 'reading' ? (
+              <div className="ocr-engine-meta">
+                <span>{ocr.engine}</span>
+                {typeof ocr.confidence === 'number' ? (
+                  <span>置信度 {Math.round(ocr.confidence * 100)}%</span>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
         {ocr.status === 'reading' ? (
@@ -845,6 +652,7 @@ function App() {
           <button
             className="primary-action"
             type="button"
+            disabled={ocr.status === 'reading'}
             onClick={() => galleryInputRef.current?.click()}
           >
             <Upload size={20} />
@@ -853,6 +661,7 @@ function App() {
           <button
             className="secondary-action"
             type="button"
+            disabled={ocr.status === 'reading'}
             onClick={() => cameraInputRef.current?.click()}
           >
             <Camera size={20} />
@@ -861,11 +670,66 @@ function App() {
         </div>
       </section>
 
+      {ocrBatch.length > 0 ? (
+        <section className="ocr-batch-panel" aria-label="批量识别结果">
+          <div className="section-title">
+            <div>
+              <span className="section-kicker">账单列表</span>
+              <h2>选择要导入的支出</h2>
+            </div>
+            <span>
+              {ocrBatch.filter((candidate) => candidate.selected).length}/{ocrBatch.length} 笔
+            </span>
+          </div>
+          <ul className="ocr-batch-list">
+            {ocrBatch.map((candidate, index) => (
+              <li key={`${candidate.sourceRow ?? candidate.note}-${index}`}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={candidate.selected}
+                    onChange={() => toggleBatchCandidate(index)}
+                  />
+                  <span className="ocr-batch-copy">
+                    <strong>{candidate.note || '未识别商户'}</strong>
+                    <small>
+                      {candidate.date} · {candidate.category} · 置信度{' '}
+                      {Math.round(candidate.confidence * 100)}%
+                    </small>
+                  </span>
+                  <strong className="ocr-batch-amount">
+                    {candidate.amount === null ? '待确认' : moneyFormatter.format(candidate.amount)}
+                  </strong>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <div className="capture-actions">
+            <button className="secondary-action" type="button" onClick={dismissBatchCandidates}>
+              <X size={19} />
+              取消
+            </button>
+            <button className="primary-action" type="button" onClick={confirmBatchCandidates}>
+              <CheckCircle2 size={19} />
+              批量入账
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       <form className="entry-form" onSubmit={handleSubmit}>
         <div className="form-heading">
           <div>
-            <span className="section-kicker">快速录入</span>
-            <h2>{editingId ? '修改记录' : '手动记一笔'}</h2>
+            <span className="section-kicker">
+              {ocr.status === 'needs-review' && ocrBatch.length === 0 ? '识别复核' : '快速录入'}
+            </span>
+            <h2>
+              {editingId
+                ? '修改记录'
+                : ocr.status === 'needs-review' && ocrBatch.length === 0
+                  ? '确认识别结果'
+                  : '手动记一笔'}
+            </h2>
           </div>
           {editingId ? (
             <button className="ghost-button" type="button" title="取消编辑" onClick={cancelEdit}>
@@ -935,7 +799,11 @@ function App() {
 
         <button className="primary-action" type="submit">
           {editingId ? <CheckCircle2 size={20} /> : <Plus size={20} />}
-          {editingId ? '保存修改' : '记一笔'}
+          {editingId
+            ? '保存修改'
+            : ocr.status === 'needs-review' && ocrBatch.length === 0
+              ? '确认入账'
+              : '记一笔'}
         </button>
       </form>
 
