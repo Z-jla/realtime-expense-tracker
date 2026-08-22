@@ -146,6 +146,7 @@ button {
 .stats-section,
 .records-section,
 .backup-section,
+.settings-section,
 .ocr-details {
   border: 1px solid #e1e8f0;
   border-radius: 8px;
@@ -684,4 +685,375 @@ button {
   color: #64748b;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.month-switcher {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.month-switcher label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 38px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.month-switcher input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.month-switcher .ghost-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.budget-status {
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid #bce5d8;
+  border-radius: 8px;
+  background: #f0fdf8;
+}
+
+.budget-status > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #397267;
+  font-size: 12px;
+}
+
+.budget-status strong {
+  color: #0f766e;
+}
+
+.budget-status.is-over {
+  border-color: #fecaca;
+  background: #fff5f5;
+}
+
+.budget-status.is-over strong {
+  color: #b42318;
+}
+
+.budget-status.is-over .bar span {
+  background: #dc2626;
+}
+
+.field input[aria-invalid='true'] {
+  border-color: #dc2626;
+  outline-color: rgba(220, 38, 38, 0.14);
+}
+
+.form-error {
+  padding: 9px 11px;
+  border-radius: 8px;
+  color: #b42318;
+  background: #fff1f2;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.record-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 118px;
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.record-filters select,
+.search-field {
+  min-height: 44px;
+  border: 1px solid #cfd9e5;
+  border-radius: 8px;
+  color: #334155;
+  background: #f8fbfd;
+}
+
+.record-filters select {
+  min-width: 0;
+  padding: 0 9px;
+}
+
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.search-field svg {
+  flex: 0 0 auto;
+  color: #64748b;
+}
+
+.search-field input {
+  min-width: 0;
+  width: 100%;
+  height: 42px;
+  border: 0;
+  outline: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.record-empty {
+  padding-top: 16px;
+}
+
+.load-more {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.settings-section {
+  margin-bottom: 12px;
+  padding: 15px;
+}
+
+.settings-section > summary,
+.ocr-details summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.settings-content {
+  display: grid;
+  gap: 13px;
+  padding-top: 15px;
+}
+
+.inline-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.inline-editor .secondary-action {
+  min-width: 82px;
+  min-height: 48px;
+  padding: 0 12px;
+}
+
+.category-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.category-chips > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 7px 6px 10px;
+  border-radius: 999px;
+  color: #0f766e;
+  background: #e7f8f3;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.category-chips button {
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-message {
+  color: #397267;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.undo-toast {
+  position: fixed;
+  z-index: 20;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  left: max(16px, env(safe-area-inset-left));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: min(calc(100% - 32px), 488px);
+  min-height: 52px;
+  margin-inline: auto;
+  padding: 10px 12px 10px 16px;
+  border-radius: 10px;
+  color: #f8fafc;
+  background: #172033;
+  box-shadow: 0 16px 34px rgba(2, 6, 23, 0.32);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.undo-toast button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  color: #5eead4;
+  background: rgba(45, 212, 191, 0.12);
+  font: inherit;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+@media (max-width: 390px) {
+  .record-filters,
+  .inline-editor {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .eyebrow,
+  .section-kicker,
+  .overview-main span,
+  .overview-metrics span,
+  .summary-tile span,
+  .field label,
+  .field,
+  .section-title span,
+  .capture-copy p,
+  .ocr-batch-copy small,
+  .empty-state,
+  .empty-text,
+  .backup-hint {
+    color: #94a3b8;
+  }
+
+  h1,
+  h2,
+  .overview-main strong,
+  .overview-metrics strong,
+  .ocr-batch-copy strong,
+  .category-row strong,
+  .expense-main strong,
+  .month-switcher label {
+    color: #f1f5f9;
+  }
+
+  .overview-main p,
+  .category-row span,
+  .ocr-details,
+  .record-filters select,
+  .search-field {
+    color: #b7c3d4;
+  }
+
+  .overview-panel,
+  .capture-panel,
+  .ocr-batch-panel,
+  .entry-form,
+  .stats-section,
+  .records-section,
+  .backup-section,
+  .settings-section,
+  .ocr-details {
+    border-color: #273548;
+    background: rgba(18, 27, 41, 0.96);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+  }
+
+  .overview-panel {
+    background:
+      linear-gradient(135deg, rgba(45, 212, 191, 0.08), rgba(248, 181, 75, 0.05)),
+      #121b29;
+  }
+
+  .overview-metrics {
+    border-color: #2c3b50;
+    background: #2c3b50;
+  }
+
+  .overview-metrics div,
+  .expense-item,
+  .ocr-batch-list li {
+    border-color: #29384c;
+    background: #172233;
+  }
+
+  .field input,
+  .field select,
+  .record-filters select,
+  .search-field,
+  .secondary-action {
+    border-color: #3a4b61;
+    color: #d9e3ef;
+    background: #152131;
+  }
+
+  .field input:focus,
+  .field select:focus {
+    background: #182638;
+  }
+
+  .amount-field input {
+    color: #f8fafc;
+  }
+
+  .bar,
+  .progress-track {
+    background: #263548;
+  }
+
+  .ocr-details pre {
+    color: #c8d3e1;
+    background: #0f1825;
+  }
+
+  .budget-status {
+    border-color: #28584f;
+    background: #102721;
+  }
+
+  .budget-status.is-over {
+    border-color: #69313a;
+    background: #2b171c;
+  }
+
+  .form-error,
+  .storage-alert {
+    border-color: #7f3942;
+    color: #fda4af;
+    background: #32171d;
+  }
+
+  .category-chips > span,
+  .ocr-engine-meta span {
+    color: #5eead4;
+    background: #12332e;
+  }
+
+  .ghost-button {
+    color: #93c5fd;
+    background: #1d3047;
+  }
+
+  .danger-button {
+    color: #fda4af;
+    background: #3a1d25;
+  }
 }

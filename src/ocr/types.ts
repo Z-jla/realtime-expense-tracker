@@ -23,7 +23,6 @@ export type OcrDocument = {
   lines: OcrLine[]
   text: string
   metrics: OcrMetrics
-  fallbackReason?: string
 }
 
 export type TransactionDirection = 'expense' | 'income' | 'refund' | 'unknown'
@@ -58,3 +57,12 @@ export type ParsedOcrResult = {
 }
 
 export type OcrProgressCallback = (progress: number, message: string) => void
+
+export type OcrUiState = {
+  status: 'idle' | 'reading' | 'saved' | 'needs-review' | 'error'
+  message: string
+  progress: number
+  rawText: string
+  engine?: string
+  confidence?: number
+}

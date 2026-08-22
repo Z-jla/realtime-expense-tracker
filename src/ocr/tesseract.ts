@@ -12,8 +12,33 @@ type TesseractBlock = NonNullable<Awaited<ReturnType<TesseractWorker['recognize'
 
 let workerPromise: Promise<TesseractWorker> | null = null
 let progressListener: OcrProgressCallback | null = null
+let idleTimer: ReturnType<typeof setTimeout> | null = null
+let activeRecognitions = 0
+
+function clearIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer)
+  idleTimer = null
+}
+
+export async function terminateTesseractWorker() {
+  clearIdleTimer()
+  const current = workerPromise
+  workerPromise = null
+  if (!current) return
+  const worker = await current.catch(() => null)
+  if (worker) await worker.terminate()
+}
+
+function scheduleIdleTermination() {
+  clearIdleTimer()
+  if (activeRecognitions > 0 || !workerPromise) return
+  idleTimer = setTimeout(() => {
+    void terminateTesseractWorker()
+  }, 60_000)
+}
 
 function getWorker() {
+  clearIdleTimer()
   if (!workerPromise) {
     workerPromise = import('tesseract.js')
       .then(async (module) => {
@@ -89,6 +114,8 @@ export async function recognizeWithTesseract(
   height: number,
   onProgress: OcrProgressCallback,
 ): Promise<OcrDocument> {
+  clearIdleTimer()
+  activeRecognitions += 1
   progressListener = onProgress
   const startedAt = performance.now()
   try {
@@ -109,6 +136,14 @@ export async function recognizeWithTesseract(
       metrics: { totalTimeMs: Math.round(performance.now() - startedAt) },
     }
   } finally {
+    activeRecognitions = Math.max(0, activeRecognitions - 1)
     progressListener = null
+    scheduleIdleTermination()
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    void terminateTesseractWorker()
+  })
 }

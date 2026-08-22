@@ -1,6 +1,14 @@
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
 
+def appVersionCodeValue = (System.getenv('SPEND_APP_VERSION_CODE') ?: '2').toInteger()
+def appVersionNameValue = System.getenv('SPEND_APP_VERSION_NAME') ?: '1.1.0'
+def releaseStorePath = System.getenv('SPEND_RELEASE_STORE_FILE')
+def releaseStorePassword = System.getenv('SPEND_RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = System.getenv('SPEND_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = System.getenv('SPEND_RELEASE_KEY_PASSWORD')
+def hasReleaseSigning = releaseStorePath && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+
 android {
     namespace = "com.spendapp.mobile"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -8,9 +16,12 @@ android {
         applicationId "com.spendapp.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCodeValue
+        versionName appVersionNameValue
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -25,11 +36,34 @@ android {
     kotlinOptions {
         jvmTarget = '21'
     }
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseStorePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def releasePackagingRequested = graph.allTasks.any { task ->
+        task.path in [':app:assembleRelease', ':app:bundleRelease', ':app:packageRelease']
+    }
+    if (releasePackagingRequested && !hasReleaseSigning) {
+        throw new GradleException('Release signing is not configured. Set SPEND_RELEASE_STORE_FILE, SPEND_RELEASE_STORE_PASSWORD, SPEND_RELEASE_KEY_ALIAS and SPEND_RELEASE_KEY_PASSWORD.')
     }
 }
 

@@ -24,5 +24,99 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Test
+        run: npm test
+
       - name: Build
         run: npm run build
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync Android project
+        run: npm run android:sync
+
+      - name: Compile debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --console=plain
+
+      - name: Verify release signing guard
+        working-directory: android
+        run: |
+          set +e
+          output=$(./gradlew assembleRelease --dry-run --no-daemon --console=plain 2>&1)
+          status=$?
+          set -e
+          echo "$output"
+          test "$status" -ne 0
+          grep -q "Release signing is not configured" <<< "$output"
+
+      - name: Create throwaway release keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore "$RUNNER_TEMP/ci-release.jks" \
+            -storepass ci-release-password \
+            -keypass ci-release-password \
+            -alias ci \
+            -keyalg RSA -keysize 2048 -validity 30 \
+            -dname "CN=CI, OU=CI, O=CI, L=CI, ST=CI, C=CN"
+
+      # R8 and shrinkResources only run for release, so a debug-only CI would never catch a
+      # stripped OpenCV/ONNX class. This builds the artifact users actually install.
+      - name: Build shrunk release APK
+        working-directory: android
+        env:
+          SPEND_RELEASE_STORE_FILE: ${{ runner.temp }}/ci-release.jks
+          SPEND_RELEASE_STORE_PASSWORD: ci-release-password
+          SPEND_RELEASE_KEY_ALIAS: ci
+          SPEND_RELEASE_KEY_PASSWORD: ci-release-password
+        run: ./gradlew assembleRelease --no-daemon --console=plain
+
+      - name: Verify release APK contents
+        working-directory: android
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          test -f "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk"
+          contents=$(unzip -l "$apk")
+          grep -q "lib/arm64-v8a/" <<< "$contents"
+          grep -q "lib/armeabi-v7a/" <<< "$contents"
+          grep -q "assets/models/det/inference.onnx" <<< "$contents"
+          grep -q "assets/models/rec/inference.onnx" <<< "$contents"
+          grep -q "assets/models/rec/inference.yml" <<< "$contents"
+          ! grep -qi "x86" <<< "$contents"
+          ! grep -qi "tesseract" <<< "$contents"
+
+          packages=$("$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" dex packages --defined-only "$apk")
+          grep -Eq '^C .*org\.opencv\.core\.Mat$' <<< "$packages"
+          grep -Eq '^C .*org\.opencv\.imgcodecs\.Imgcodecs$' <<< "$packages"
+          grep -Eq '^C .*com\.paddle\.ocr\.PaddleOCR$' <<< "$packages"
+          grep -Eq '^C .*ai\.onnxruntime\.OrtSession$' <<< "$packages"
+          grep -Eq '^C .*com\.spendapp\.mobile\.PaddleOcrPlugin$' <<< "$packages"

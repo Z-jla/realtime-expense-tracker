@@ -8,6 +8,7 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: light dark;
 }
 
 * {
@@ -24,4 +25,52 @@ body {
 
 #root {
   min-height: 100svh;
+}
+
+.fatal-error {
+  display: grid;
+  place-content: center;
+  gap: 14px;
+  min-height: 100svh;
+  padding: 28px;
+  color: #172033;
+  text-align: center;
+}
+
+.fatal-error p {
+  max-width: 440px;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.fatal-error button {
+  min-height: 48px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: #0f766e;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #e7edf5;
+    background: #0b111b;
+  }
+
+  body {
+    background:
+      linear-gradient(180deg, rgba(45, 212, 191, 0.08), transparent 210px),
+      #0b111b;
+  }
+
+  .fatal-error {
+    color: #f1f5f9;
+  }
+
+  .fatal-error p {
+    color: #a8b4c4;
+  }
 }

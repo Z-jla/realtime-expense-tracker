@@ -1,7 +1,8 @@
 # Third Party Notices
 
-This project bundles local OCR runtime assets under `public/tesseract/` so the
-Android APK can run OCR without downloading models at first use.
+This project bundles local OCR runtime assets under `public/tesseract/` for the
+Web/PWA build. Android builds exclude that directory and use the bundled
+PP-OCRv6 ONNX models instead.
 
 ## PaddleOCR Android SDK
 
@@ -45,3 +46,10 @@ Android APK can run OCR without downloading models at first use.
 - These files come from the Tesseract OCR language data ecosystem. Before
   redistribution in a published app or package, review and preserve the
   upstream notices that apply to the specific model files you ship.
+
+## Capacitor Official Plugins
+
+- `@capacitor/camera` is used to obtain native image URIs without transferring base64 images through the JavaScript bridge.
+- `@capacitor/filesystem` writes Android backups to the public Documents directory.
+- `@capacitor/share` opens the native share sheet for backup files.
+- License: MIT.

@@ -37,12 +37,3 @@ export async function normalizeImage(file: File): Promise<NormalizedImage> {
   if (!blob) throw new Error('图片预处理失败')
   return { blob, width, height }
 }
-
-export function blobToDataUrl(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
-    reader.readAsDataURL(blob)
-  })
-}

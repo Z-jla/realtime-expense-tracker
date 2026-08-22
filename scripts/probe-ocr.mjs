@@ -1,15 +1,19 @@
 import path from 'node:path'
+import { mkdirSync } from 'node:fs'
 import tesseract from 'tesseract.js'
 import { formatOcrReview, parseOcrDocument } from '../src/ocr/parser.ts'
 
 const { createWorker, PSM } = tesseract
 const imagePath = process.argv[2]
 const langs = (process.argv[3] ?? 'chi_sim+eng').split('+')
+const cachePath = path.resolve('ocr-debug/tesseract-cache')
 
 if (!imagePath) {
   console.error('Usage: node scripts/probe-ocr.mjs <image-path> [chi_sim+eng]')
   process.exit(1)
 }
+
+mkdirSync(cachePath, { recursive: true })
 
 function flattenBlocks(blocks) {
   return (blocks ?? []).flatMap((block) =>
@@ -30,6 +34,7 @@ function flattenBlocks(blocks) {
 
 const worker = await createWorker(langs, undefined, {
   langPath: path.resolve('public/tesseract'),
+  cachePath,
   gzip: false,
   logger: (message) => {
     if (message.status === 'recognizing text') {

@@ -426,7 +426,6 @@ function makeTransaction(
   if (direction === 'income') warnings.push('识别结果更像收入')
   if (direction === 'refund') warnings.push('识别结果更像退款')
   if (direction === 'unknown') warnings.push('无法稳定判断收支方向')
-  if (document.fallbackReason) warnings.push('PP-OCRv6 已降级为兼容引擎')
 
   const documentConfidence =
     document.lines.reduce((sum, line) => sum + line.confidence, 0) / Math.max(document.lines.length, 1)
@@ -494,7 +493,6 @@ export function formatOcrReview(document: OcrDocument, parsed: ParsedOcrResult) 
     `【耗时】${time}`,
     `【平均置信度】${Math.round(parsed.documentConfidence * 100)}%`,
   ]
-  if (document.fallbackReason) header.push(`【降级原因】${document.fallbackReason}`)
 
   const fields = parsed.transactions.slice(0, 8).map((transaction, index) => {
     const label = parsed.transactions.length > 1 ? `候选 ${index + 1}` : '解析结果'
