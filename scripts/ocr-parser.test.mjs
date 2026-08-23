@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseOcrDocument } from '../src/ocr/parser.ts'
+import { formatOcrReview, parseOcrDocument } from '../src/ocr/parser.ts'
 
 const NOW = new Date(2026, 7, 19, 12, 0, 0)
 
@@ -146,4 +146,44 @@ test('支持全角数字与中文金额标点', () => {
   )
 
   assert.equal(parsed.transactions[0].amount, 12.8)
+})
+
+test('年初遇到未写年份的年末日期时归入上一年', () => {
+  const parsed = parseOcrDocument(
+    document([
+      line('付款成功', 420, 100, 240),
+      line('实付金额 ¥23.50', 280, 190, 520, 56),
+      line('支付时间 12月31日 23:58', 120, 360, 800),
+    ]),
+    new Date(2027, 0, 2, 12, 0, 0),
+  )
+
+  assert.equal(parsed.transactions[0].date, '2026-12-31')
+})
+
+test('账单列表备注会先移除完整日期再移除金额', () => {
+  const parsed = parseOcrDocument(
+    document([
+      line('全部账单', 420, 40, 240),
+      line('8 月 18 日 肯德基 -23.50', 80, 180, 900),
+      line('8 月 19 日 地铁乘车 -4.00', 80, 270, 900),
+    ]),
+    NOW,
+  )
+
+  assert.deepEqual(
+    parsed.transactions.map((item) => item.note),
+    ['肯德基', '地铁乘车'],
+  )
+})
+
+test('识别复核文本按画面坐标从上到下、从左到右排列', () => {
+  const source = document([
+    line('底部', 100, 300, 200),
+    line('右侧', 500, 100, 200),
+    line('左侧', 100, 100, 200),
+  ])
+  const review = formatOcrReview(source, parseOcrDocument(source, NOW))
+
+  assert.ok(review.indexOf('左侧 右侧') < review.indexOf('底部'))
 })

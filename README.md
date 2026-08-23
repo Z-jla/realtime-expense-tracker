@@ -113,7 +113,7 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 debug APK 可以直接安装到 Android 手机。安装时如果系统提示未知来源应用，需要允许当前文件管理器或浏览器安装应用。
 
-Android 构建仅包含 `arm64-v8a` 和 `armeabi-v7a`，不会打入模拟器用的 x86/x86_64 原生库，也不会复制 Web 版 Tesseract 资源。
+Android 构建仅包含 `arm64-v8a` 和 `armeabi-v7a`，不会打入模拟器用的 x86/x86_64 原生库，也不会复制 Web 版 Tesseract 资源。官方 OpenCV 4.12.0 的 64 位原生库支持 Android 16 KB page size；CI 会运行 Android Lint 和 `zipalign -P 16` 防止回归。
 
 ### 正式签名与版本
 
@@ -150,7 +150,7 @@ conda run -n spend-app node scripts/probe-ocr.mjs "C:\path\to\screenshot.jpg" ch
 
 ## 数据说明
 
-- 所有账单数据保存在本机 `localStorage`；Android 的应用私有目录还保留最新和上一份 JSON 快照，并与 WebView 数据一起纳入系统云备份/换机迁移。若启动时发现本地存储整体为空或损坏，应用会尝试从快照恢复（最新一份读不出时自动回退到上一份）。
+- 所有账单数据保存在本机 `localStorage`；Android 的应用私有目录还保留最新和上一份 JSON 快照，并与 WebView 数据一起纳入系统云备份/换机迁移。若启动时发现账单或设置任一部分缺失/损坏，应用会只恢复缺失部分（最新快照读不出时自动回退到上一份）。
 - 截图识别的原始文本只保留 200 字摘要用于排查。完整保存会随账单条数线性膨胀，很快就会超出 WebView 约 5–10 MB 的 `localStorage` 配额。
 - 当前版本没有账号系统、云同步和服务器。
 - 卸载应用、清除应用数据或清理浏览器站点数据会删除本地账单。

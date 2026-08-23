@@ -13,6 +13,25 @@ describe('关键记账交互', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('请输入大于 0 的有效金额')
   })
 
+  it('无效日期不会写入账单', () => {
+    render(<App />)
+    fireEvent.change(screen.getByLabelText('金额'), { target: { value: '12.50' } })
+    fireEvent.change(screen.getByLabelText('日期'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '记一笔' }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent('请选择有效且不晚于今天的日期')
+    expect(JSON.parse(localStorage.getItem(EXPENSES_STORAGE_KEY) ?? '[]')).toHaveLength(0)
+  })
+
+  it('超过单笔上限的金额不会写入账单', () => {
+    render(<App />)
+    fireEvent.change(screen.getByLabelText('金额'), { target: { value: '100000001' } })
+    fireEvent.click(screen.getByRole('button', { name: '记一笔' }))
+
+    expect(screen.getByRole('alert')).toHaveTextContent('单笔金额不能超过')
+    expect(JSON.parse(localStorage.getItem(EXPENSES_STORAGE_KEY) ?? '[]')).toHaveLength(0)
+  })
+
   it('删除后可以在五秒内撤销', () => {
     const stored: Expense = {
       id: 'expense-1',

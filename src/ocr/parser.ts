@@ -201,7 +201,7 @@ function extractAmountCandidates(document: OcrDocument, rows: LogicalRow[]) {
     const hasMediumAnchor = MEDIUM_AMOUNT_ANCHOR.test(context)
     const hasNegativeContext = NEGATIVE_AMOUNT_CONTEXT.test(row.text)
     const dateAndTimeRanges = [
-      ...repaired.matchAll(/(?:19|20)\d{2}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}日?/g),
+      ...repaired.matchAll(/(?:19|20)\d{2}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}\s*日?/g),
       ...repaired.matchAll(/\d{1,2}[:：]\d{2}(?::\d{2})?/g),
     ].map((item) => ({ start: item.index, end: item.index + item[0].length }))
     const pattern = new RegExp(MONEY_PATTERN.source, MONEY_PATTERN.flags)
@@ -334,10 +334,18 @@ function validDate(year: number, month: number, day: number) {
 
 function extractDate(text: string, now: Date) {
   const normalized = normalizeOcrText(text)
-  const full = normalized.match(/(20\d{2})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})日?/)
+  const full = normalized.match(/(20\d{2})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?/)
   if (full) return validDate(Number(full[1]), Number(full[2]), Number(full[3]))
-  const short = normalized.match(/(?:^|\s)(\d{1,2})\s*[-/.月]\s*(\d{1,2})日?(?:\s|$)/)
-  if (short) return validDate(now.getFullYear(), Number(short[1]), Number(short[2]))
+  const short = normalized.match(/(?:^|\s)(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?(?:\s|$)/)
+  if (short) {
+    const month = Number(short[1])
+    const day = Number(short[2])
+    const thisYear = validDate(now.getFullYear(), month, day)
+    if (!thisYear) return null
+    return thisYear <= localDate(now)
+      ? thisYear
+      : validDate(now.getFullYear() - 1, month, day)
+  }
   return null
 }
 
@@ -382,10 +390,10 @@ function extractMerchant(rows: LogicalRow[], fullText: string) {
 
 function cleanListNote(rowText: string) {
   return rowText
-    .replace(new RegExp(MONEY_PATTERN.source, MONEY_PATTERN.flags), ' ')
-    .replace(/20\d{2}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}日?/g, ' ')
-    .replace(/(?:^|\s)\d{1,2}\s*[-/.月]\s*\d{1,2}日?(?=\s|$)/g, ' ')
+    .replace(/20\d{2}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}\s*日?/g, ' ')
+    .replace(/(?:^|\s)\d{1,2}\s*[-/.月]\s*\d{1,2}\s*日?(?=\s|$)/g, ' ')
     .replace(/\b\d{1,2}[:：]\d{2}(?::\d{2})?\b/g, ' ')
+    .replace(new RegExp(MONEY_PATTERN.source, MONEY_PATTERN.flags), ' ')
     .replace(/(交易成功|支付成功|付款成功|支出)/g, ' ')
     .replace(/[|·•]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -500,8 +508,8 @@ export function formatOcrReview(document: OcrDocument, parsed: ParsedOcrResult) 
       transaction.confidence * 100,
     )}%，${transaction.note}`
   })
-  const lines = document.lines.map(
-    (line) => `[${String(Math.round(line.confidence * 100)).padStart(3, ' ')}%] ${line.text}`,
+  const lines = buildRows(document).map(
+    (row) => `[${String(Math.round(row.confidence * 100)).padStart(3, ' ')}%] ${row.text}`,
   )
   return [...header, ...fields, '', '【识别文本】', ...lines].join('\n')
 }

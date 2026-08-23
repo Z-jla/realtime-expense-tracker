@@ -3,8 +3,9 @@ package com.spendapp.mobile
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
+import androidx.core.net.toUri
+import androidx.exifinterface.media.ExifInterface
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -20,7 +21,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -38,6 +38,9 @@ class PaddleOcrPlugin : Plugin() {
 
     @Volatile
     private var ocr: PaddleOCR? = null
+
+    @Volatile
+    private var destroyed = false
 
     /**
      * The image handed to the engine, plus the dimensions of the pixels the engine will actually
@@ -152,7 +155,7 @@ class PaddleOcrPlugin : Plugin() {
      * step with the pixels OpenCV sees and stops a 100 MP photo from exhausting the heap.
      */
     private fun loadAnalysisImage(imagePath: String): AnalysisImage {
-        val uri = Uri.parse(imagePath)
+        val uri = imagePath.toUri()
         val declared = declaredSize(uri, imagePath)
         if (declared > MAX_IMAGE_BYTES) {
             error("图片超过 ${MAX_IMAGE_BYTES / (1024 * 1024)} MB 限制，请先裁剪或压缩后再试")
@@ -290,8 +293,10 @@ class PaddleOcrPlugin : Plugin() {
     }
 
     private suspend fun getOrCreateEngine(): PaddleOCR {
+        check(!destroyed) { "OCR 插件已停止" }
         ocr?.let { return it }
         return initializationMutex.withLock {
+            check(!destroyed) { "OCR 插件已停止" }
             ocr?.let { return@withLock it }
             val openCvReady = withContext(Dispatchers.IO) { OpenCVUtils.init(context) }
             if (!openCvReady) {
@@ -312,12 +317,19 @@ class PaddleOcrPlugin : Plugin() {
     }
 
     override fun handleOnDestroy() {
-        val current = ocr
-        ocr = null
-        if (current != null) {
-            runBlocking(Dispatchers.IO) { current.release() }
-        }
+        destroyed = true
         scope.cancel()
+        // The recognition coroutine resumes on Main before releasing its mutex. Waiting here with
+        // runBlocking would therefore deadlock the Activity teardown while recognition is active.
+        CoroutineScope(Dispatchers.IO).launch {
+            recognitionMutex.withLock {
+                initializationMutex.withLock {
+                    val current = ocr
+                    ocr = null
+                    current?.release()
+                }
+            }
+        }
         super.handleOnDestroy()
     }
 

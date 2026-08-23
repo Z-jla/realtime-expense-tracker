@@ -24,7 +24,7 @@ PP-OCRv6 ONNX models instead.
 ## Native OCR Runtime Dependencies
 
 - ONNX Runtime Android (`com.microsoft.onnxruntime:onnxruntime-android:1.21.1`), MIT License.
-- OpenCV Android (`com.quickbirdstudios:opencv:4.5.3`), Apache-2.0 License.
+- OpenCV Android (`org.opencv:opencv:4.12.0`), Apache-2.0 License; official artifact from https://central.sonatype.com/artifact/org.opencv/opencv/4.12.0.
 - Kotlin Coroutines Android (`org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0`), Apache-2.0 License.
 
 ## Tesseract.js
@@ -42,10 +42,12 @@ PP-OCRv6 ONNX models instead.
 ## Tesseract OCR Language Data
 
 - Files: `chi_sim.traineddata`, `eng.traineddata`
-- Used for Simplified Chinese and English OCR.
-- These files come from the Tesseract OCR language data ecosystem. Before
-  redistribution in a published app or package, review and preserve the
-  upstream notices that apply to the specific model files you ship.
+- Source: `naptha/tessdata`, branch `gh-pages`, directory `4.0.0_best_int`.
+- Upstream: https://github.com/naptha/tessdata/tree/gh-pages/4.0.0_best_int
+- License: Apache-2.0 (https://github.com/naptha/tessdata/blob/gh-pages/LICENSE)
+- `chi_sim.traineddata` SHA-256: `9784F7C917C546424B690FCDE708CE1F604A4393D08BB51DDAB146D7D7C794E6`
+- `eng.traineddata` SHA-256: `5DC5D8D640A212C9D6184921BA103B186F50E0FED9EE716C53E6B312B400D747`
+- The repository stores the decompressed files; the hashes above were verified against the decompressed upstream `.gz` assets.
 
 ## Capacitor Official Plugins
 

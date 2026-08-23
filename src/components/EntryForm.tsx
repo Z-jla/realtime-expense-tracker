@@ -10,7 +10,8 @@ type Props = {
   categories: string[]
   editing: boolean
   reviewing: boolean
-  error: string | null
+  maxDate: string
+  error: { field: 'amount' | 'date'; message: string } | null
   onChange: (key: keyof Draft, value: string) => void
   onSubmit: FormEventHandler<HTMLFormElement>
   onCancel: () => void
@@ -21,11 +22,15 @@ export default function EntryForm({
   categories,
   editing,
   reviewing,
+  maxDate,
   error,
   onChange,
   onSubmit,
   onCancel,
 }: Props) {
+  const amountError = error?.field === 'amount'
+  const dateError = error?.field === 'date'
+
   return (
     <form className="entry-form" onSubmit={onSubmit} noValidate>
       <div className="form-heading">
@@ -47,17 +52,11 @@ export default function EntryForm({
           inputMode="decimal"
           placeholder="0.00"
           value={draft.amount}
-          aria-invalid={Boolean(error)}
-          aria-describedby={error ? 'amount-error' : undefined}
+          aria-invalid={amountError}
+          aria-describedby={amountError ? 'entry-form-error' : undefined}
           onChange={(event) => onChange('amount', event.target.value)}
         />
       </label>
-      {error ? (
-        <p id="amount-error" className="form-error" role="alert">
-          {error}
-        </p>
-      ) : null}
-
       <div className="field-row">
         <label className="field">
           分类
@@ -71,9 +70,22 @@ export default function EntryForm({
         </label>
         <label className="field">
           日期
-          <input type="date" value={draft.date} onChange={(event) => onChange('date', event.target.value)} />
+          <input
+            type="date"
+            max={maxDate}
+            value={draft.date}
+            aria-invalid={dateError}
+            aria-describedby={dateError ? 'entry-form-error' : undefined}
+            onChange={(event) => onChange('date', event.target.value)}
+          />
         </label>
       </div>
+
+      {error ? (
+        <p id="entry-form-error" className="form-error" role="alert">
+          {error.message}
+        </p>
+      ) : null}
 
       <div className="field-row">
         <label className="field">

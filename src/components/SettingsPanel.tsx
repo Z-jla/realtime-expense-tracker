@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { Plus, Settings2, X } from 'lucide-react'
 import {
   DEFAULT_CATEGORIES,
+  isValidExpenseAmount,
+  MAX_EXPENSE_AMOUNT,
+  moneyFormatter,
   parseAmountInput,
   type AppSettings,
 } from '../expenses.ts'
@@ -24,8 +27,8 @@ export default function SettingsPanel({ settings, onChange }: Props) {
       return
     }
     const parsed = parseAmountInput(budget)
-    if (parsed === null || parsed <= 0) {
-      setMessage('请输入大于 0 的有效预算金额。')
+    if (parsed === null || !isValidExpenseAmount(parsed)) {
+      setMessage(`请输入大于 0 且不超过 ${moneyFormatter.format(MAX_EXPENSE_AMOUNT)} 的预算金额。`)
       return
     }
     onChange({ ...settings, monthlyBudget: parsed })

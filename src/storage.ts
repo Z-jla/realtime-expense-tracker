@@ -1,5 +1,6 @@
 import {
   DEFAULT_SETTINGS,
+  isValidExpenseAmount,
   sanitizeExpense,
   sanitizeSettings,
   type AppSettings,
@@ -70,15 +71,29 @@ export function getStoredAppDataPresence(storage: StorageLike | null = browserSt
   let settings = false
   try {
     const rawExpenses = storage.getItem(EXPENSES_STORAGE_KEY)
-    expenses = rawExpenses !== null && Array.isArray(JSON.parse(rawExpenses))
+    if (rawExpenses !== null) {
+      const parsed = JSON.parse(rawExpenses) as unknown
+      expenses =
+        Array.isArray(parsed) && parsed.every((item) => sanitizeExpense(item) !== null)
+    }
   } catch {
     expenses = false
   }
   try {
     const rawSettings = storage.getItem(SETTINGS_STORAGE_KEY)
     if (rawSettings !== null) {
-      const parsed = JSON.parse(rawSettings)
-      settings = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      const parsed = JSON.parse(rawSettings) as unknown
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const value = parsed as Record<string, unknown>
+        const budget = value.monthlyBudget
+        const categories = value.customCategories
+        settings =
+          (budget === undefined ||
+            budget === null ||
+            (typeof budget === 'number' && isValidExpenseAmount(budget))) &&
+          (categories === undefined ||
+            (Array.isArray(categories) && categories.every((item) => typeof item === 'string')))
+      }
     }
   } catch {
     settings = false

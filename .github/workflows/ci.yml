@@ -67,6 +67,10 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --console=plain
 
+      - name: Compile Android tests and run lint
+        working-directory: android
+        run: ./gradlew compileDebugAndroidTestSources lintDebug --no-daemon --console=plain
+
       - name: Verify release signing guard
         working-directory: android
         run: |
@@ -105,6 +109,7 @@ jobs:
           apk=app/build/outputs/apk/release/app-release.apk
           test -f "$apk"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$apk"
           contents=$(unzip -l "$apk")
           grep -q "lib/arm64-v8a/" <<< "$contents"
           grep -q "lib/armeabi-v7a/" <<< "$contents"
@@ -120,3 +125,11 @@ jobs:
           grep -Eq '^C .*com\.paddle\.ocr\.PaddleOCR$' <<< "$packages"
           grep -Eq '^C .*ai\.onnxruntime\.OrtSession$' <<< "$packages"
           grep -Eq '^C .*com\.spendapp\.mobile\.PaddleOcrPlugin$' <<< "$packages"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: realtime-expense-tracker-debug-${{ github.sha }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

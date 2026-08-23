@@ -66,6 +66,7 @@ export function formatLocalDate(date = new Date()) {
  * localStorage 配额（WebView 通常只有 5–10 MB），所以只保留一小段摘要。
  */
 export const RAW_TEXT_LIMIT = 200
+export const MAX_EXPENSE_AMOUNT = 100_000_000
 
 export function truncateRawText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
@@ -141,19 +142,39 @@ export function parseAmountInput(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+export function isValidExpenseAmount(value: number) {
+  if (!Number.isFinite(value) || value <= 0 || value > MAX_EXPENSE_AMOUNT) return false
+  const cents = value * 100
+  return Number.isSafeInteger(Math.round(cents)) && Math.abs(cents - Math.round(cents)) < 1e-7
+}
+
+export function isValidExpenseDate(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return false
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false
+
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  return day <= daysInMonth[month - 1]
+}
+
 export function sanitizeExpense(item: unknown): Expense | null {
   if (!item || typeof item !== 'object') return null
   const raw = item as Record<string, unknown>
   const amount = typeof raw.amount === 'number' ? raw.amount : Number(raw.amount)
-  if (!Number.isFinite(amount) || amount <= 0 || amount > 100_000_000) return null
+  if (!isValidExpenseAmount(amount)) return null
 
   const rawDate = typeof raw.date === 'string' ? raw.date : ''
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : formatLocalDate()
+  if (!isValidExpenseDate(rawDate)) return null
   const expense: Expense = {
     id: typeof raw.id === 'string' && raw.id ? raw.id : createId(),
     amount,
     category: typeof raw.category === 'string' && raw.category.trim() ? raw.category.trim() : '其他',
-    date,
+    date: rawDate,
     note: typeof raw.note === 'string' ? raw.note.trim() : '',
     paymentMethod:
       typeof raw.paymentMethod === 'string' && raw.paymentMethod.trim()
@@ -183,14 +204,17 @@ export function sanitizeSettings(value: unknown): AppSettings {
     : []
 
   return {
-    monthlyBudget: budget !== null && Number.isFinite(budget) && budget > 0 ? budget : null,
+    monthlyBudget: budget !== null && isValidExpenseAmount(budget) ? budget : null,
     customCategories: [...new Set(customCategories)].slice(0, 30),
   }
 }
 
 export function createExpense(draft: Draft, source: Expense['source'], rawText?: string): Expense {
   const amount = parseAmountInput(draft.amount)
-  if (amount === null || amount <= 0) throw new Error('金额必须大于 0')
+  if (amount === null || !isValidExpenseAmount(amount)) {
+    throw new Error(`金额必须大于 0 且不超过 ${MAX_EXPENSE_AMOUNT}`)
+  }
+  if (!isValidExpenseDate(draft.date)) throw new Error('日期格式无效')
   return {
     id: createId(),
     amount,
@@ -226,7 +250,7 @@ export function expenseKey(
 /** Returns null when the draft has no parseable amount, i.e. it can never match an expense. */
 export function draftKey(draft: Draft) {
   const amount = parseAmountInput(draft.amount)
-  if (amount === null) return null
+  if (amount === null || !isValidExpenseAmount(amount) || !isValidExpenseDate(draft.date)) return null
   return semanticExpenseKey(amount, draft.date, draft.paymentMethod, draft.note)
 }
 

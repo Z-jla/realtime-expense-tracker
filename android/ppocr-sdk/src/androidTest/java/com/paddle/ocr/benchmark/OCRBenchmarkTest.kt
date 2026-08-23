@@ -71,8 +71,7 @@ class OCRBenchmarkTest {
         }
 
         private fun getInstrumentationArgument(key: String): String? {
-            val args = InstrumentationRegistry.getArguments()
-            return args[key] as? String
+            return InstrumentationRegistry.getArguments().getString(key)
         }
 
         private fun saveAndPrint(filename: String, json: JSONObject) {
@@ -98,6 +97,11 @@ class OCRBenchmarkTest {
 
         assertTrue("Should have results", payload.getJSONArray("items").length() > 0)
         assertTrue("Should detect text", result.lineCount > 0)
+        val recognizedText = result.results.joinToString("\n") { it.text }
+        assertTrue(
+            "Should recognize reference-sign text; actual output: $recognizedText",
+            recognizedText.contains("上海") && recognizedText.contains("打浦路"),
+        )
     }
 
     // ========================================================================

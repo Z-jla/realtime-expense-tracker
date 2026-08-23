@@ -1,6 +1,6 @@
 {
   "name": "realtime-expense-tracker",
-  "private": false,
+  "private": true,
   "version": "1.1.0",
   "description": "手机优先的个人支出记账应用，支持手动记账、截图 OCR 自动入账和 Android APK 打包。",
   "license": "MIT",

@@ -27,6 +27,10 @@ import {
   createExpenseKeySet,
   defaultDraft,
   draftKey,
+  isValidExpenseAmount,
+  isValidExpenseDate,
+  MAX_EXPENSE_AMOUNT,
+  mergeImportedExpenses,
   moneyFormatter,
   parseAmountInput,
   sanitizeExpense,
@@ -60,17 +64,20 @@ function App() {
   const [expenses, setExpenses] = useState<Expense[]>(() => loadExpenses())
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
   const [shouldRestoreSnapshot] = useState(() => {
-    // 只有当本地存储整体为空/损坏时才去找快照。settings 从未被写过（用户没改过预算）
-    // 并不代表丢数据，否则每次冷启动都会白跑一次文件读取。
+    // 任一数据分区缺失或损坏时检查快照；恢复逻辑只覆盖缺失的那一部分。
+    // 首次启动尚未写入 settings 也会进入一次检查，完成后默认设置会落盘。
     const presence = getStoredAppDataPresence()
-    return !presence.expenses && !presence.settings
+    return !presence.expenses || !presence.settings
   })
   const [backupReady, setBackupReady] = useState(
     () => !Capacitor.isNativePlatform() || !shouldRestoreSnapshot,
   )
   const [draft, setDraft] = useState<Draft>(() => defaultDraft())
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [formError, setFormError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<{
+    field: 'amount' | 'date'
+    message: string
+  } | null>(null)
   const [storageError, setStorageError] = useState<string | null>(null)
   const [ocr, setOcr] = useState<OcrUiState>({
     status: 'idle',
@@ -85,6 +92,8 @@ function App() {
   const expensesRef = useRef(expenses)
   const backupStateRef = useRef({ expenses, settings })
   const pendingOcrTextRef = useRef<string | null>(null)
+  const ocrRequestIdRef = useRef(0)
+  const ocrBusyRef = useRef(false)
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previousTodayRef = useRef(today)
   expensesRef.current = expenses
@@ -149,9 +158,13 @@ function App() {
         const snapshotExpenses = snapshot.expenses
           .map(sanitizeExpense)
           .filter((expense): expense is Expense => expense !== null)
+        const currentExpenses = backupStateRef.current.expenses
+        const recoveredExpenses = currentPresence.expenses
+          ? []
+          : mergeImportedExpenses(snapshotExpenses, currentExpenses).added
         const restoredExpenses = currentPresence.expenses
-          ? backupStateRef.current.expenses
-          : snapshotExpenses
+          ? currentExpenses
+          : [...currentExpenses, ...recoveredExpenses]
         const restoredSettings =
           currentPresence.settings || !snapshot.settings
             ? backupStateRef.current.settings
@@ -173,10 +186,10 @@ function App() {
             ? null
             : '系统备份已找到，但恢复到本地存储失败。请立即导出 JSON 备份。',
         )
-        if (!currentPresence.expenses && restoredExpenses.length > 0) {
+        if (!currentPresence.expenses && recoveredExpenses.length > 0) {
           setOcr((current) => ({
             ...current,
-            message: `已从应用私有备份恢复 ${restoredExpenses.length} 笔记录。`,
+            message: `已从应用私有备份恢复 ${recoveredExpenses.length} 笔记录。`,
           }))
         }
       })
@@ -210,14 +223,31 @@ function App() {
 
   const handleDraftChange = (key: keyof Draft, value: string) => {
     setDraft((current) => ({ ...current, [key]: value }))
-    if (key === 'amount') setFormError(null)
+    if (key === formError?.field) setFormError(null)
   }
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const amount = parseAmountInput(draft.amount)
     if (amount === null || amount <= 0) {
-      setFormError('请输入大于 0 的有效金额，例如 12.50 或 1,234.56。')
+      setFormError({
+        field: 'amount',
+        message: '请输入大于 0 的有效金额，例如 12.50 或 1,234.56。',
+      })
+      return
+    }
+    if (!isValidExpenseAmount(amount)) {
+      setFormError({
+        field: 'amount',
+        message: `单笔金额不能超过 ${moneyFormatter.format(MAX_EXPENSE_AMOUNT)}。`,
+      })
+      return
+    }
+    if (!isValidExpenseDate(draft.date) || draft.date > today) {
+      setFormError({
+        field: 'date',
+        message: '请选择有效且不晚于今天的日期。',
+      })
       return
     }
 
@@ -291,7 +321,8 @@ function App() {
     setRecentlyDeleted(null)
   }
 
-  const applyOcrDocument = (document: OcrDocument) => {
+  const applyOcrDocument = (document: OcrDocument, requestId: number) => {
+    if (requestId !== ocrRequestIdRef.current) return
     const parsed = parseOcrDocument(document)
     const decision = decideOcrDocument(document, parsed, expensesRef.current)
     const reviewText = formatOcrReview(document, parsed)
@@ -354,7 +385,8 @@ function App() {
     })
   }
 
-  const updateOcrProgress = (progress: number, message: string) => {
+  const updateOcrProgress = (requestId: number, progress: number, message: string) => {
+    if (requestId !== ocrRequestIdRef.current) return
     setOcr((current) => ({
       ...current,
       status: 'reading',
@@ -364,6 +396,9 @@ function App() {
   }
 
   const prepareOcr = () => {
+    if (ocrBusyRef.current) return null
+    ocrBusyRef.current = true
+    const requestId = ++ocrRequestIdRef.current
     setOcr({
       status: 'reading',
       message: '正在准备离线识别…',
@@ -372,14 +407,24 @@ function App() {
     })
     setOcrBatch([])
     pendingOcrTextRef.current = null
+    return requestId
+  }
+
+  const finishOcr = (requestId: number) => {
+    if (requestId === ocrRequestIdRef.current) ocrBusyRef.current = false
   }
 
   const handleNativeCapture = async (source: NativeCaptureSource) => {
-    prepareOcr()
+    const requestId = prepareOcr()
+    if (requestId === null) return
     try {
       const imagePath = await captureNativeImage(source)
-      applyOcrDocument(await recognizeNativeExpenseImage(imagePath, updateOcrProgress))
+      const document = await recognizeNativeExpenseImage(imagePath, (progress, message) =>
+        updateOcrProgress(requestId, progress, message),
+      )
+      applyOcrDocument(document, requestId)
     } catch (error) {
+      if (requestId !== ocrRequestIdRef.current) return
       if (isNativeCaptureCancellation(error)) {
         setOcr((current) => ({ ...current, status: 'idle', message: '已取消选择图片。', progress: 0 }))
         return
@@ -399,10 +444,13 @@ function App() {
         progress: 0,
         rawText: '',
       })
+    } finally {
+      finishOcr(requestId)
     }
   }
 
   const openImageSource = (source: NativeCaptureSource) => {
+    if (ocrBusyRef.current) return
     if (Capacitor.isNativePlatform()) {
       void handleNativeCapture(source)
     } else if (source === 'photos') {
@@ -415,10 +463,18 @@ function App() {
   const handleWebImage = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
-    prepareOcr()
+    const requestId = prepareOcr()
+    if (requestId === null) {
+      event.target.value = ''
+      return
+    }
     try {
-      applyOcrDocument(await recognizeExpenseImage(file, updateOcrProgress))
+      const document = await recognizeExpenseImage(file, (progress, message) =>
+        updateOcrProgress(requestId, progress, message),
+      )
+      applyOcrDocument(document, requestId)
     } catch (error) {
+      if (requestId !== ocrRequestIdRef.current) return
       setOcr({
         status: 'error',
         message: error instanceof Error ? error.message : '截图识别失败，请换一张更清晰的截图。',
@@ -426,6 +482,7 @@ function App() {
         rawText: '',
       })
     } finally {
+      finishOcr(requestId)
       event.target.value = ''
     }
   }
@@ -483,6 +540,7 @@ function App() {
           className="icon-button"
           type="button"
           title="从相册选择截图"
+          disabled={ocr.status === 'reading'}
           onClick={() => openImageSource('photos')}
         >
           <Images size={22} />
@@ -519,6 +577,7 @@ function App() {
         categories={categories}
         editing={editingId !== null}
         reviewing={ocr.status === 'needs-review' && ocrBatch.length === 0}
+        maxDate={today}
         error={formError}
         onChange={handleDraftChange}
         onSubmit={handleSubmit}

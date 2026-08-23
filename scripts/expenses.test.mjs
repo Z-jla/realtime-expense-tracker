@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createBackupDocument, parseBackupText } from '../src/backup.ts'
 import {
+  MAX_EXPENSE_AMOUNT,
   RAW_TEXT_LIMIT,
   createExpense,
   createExpenseKeySet,
   draftKey,
   expenseKey,
+  isValidExpenseDate,
   mergeImportedExpenses,
   parseAmountInput,
   sanitizeExpense,
@@ -59,10 +61,37 @@ test('金额输入拒绝空值、混乱分隔符与非数字', () => {
   assert.equal(parseAmountInput('十二元'), null)
 })
 
+test('账单金额必须是分单位且不能超过统一上限', () => {
+  assert.equal(sanitizeExpense(expense({ amount: 0.001 })), null)
+  assert.deepEqual(sanitizeExpense(expense({ amount: 12.34 })), expense({ amount: 12.34 }))
+})
+
 test('费用清洗拒绝非法金额并保留有效记录', () => {
   assert.equal(sanitizeExpense({ amount: 0 }), null)
   assert.equal(sanitizeExpense({ amount: 'abc' }), null)
+  assert.equal(sanitizeExpense(expense({ amount: MAX_EXPENSE_AMOUNT + 1 })), null)
   assert.deepEqual(sanitizeExpense(expense()), expense())
+})
+
+test('日期校验拒绝空值、错误格式和不存在的日期', () => {
+  assert.equal(isValidExpenseDate('2024-02-29'), true)
+  assert.equal(isValidExpenseDate('2026-02-29'), false)
+  assert.equal(isValidExpenseDate('2026-13-01'), false)
+  assert.equal(isValidExpenseDate('2026-8-22'), false)
+  assert.equal(isValidExpenseDate(''), false)
+  assert.equal(sanitizeExpense(expense({ date: '2026-02-29' })), null)
+})
+
+test('创建账单拒绝超限金额和无效日期', () => {
+  const draft = {
+    amount: '12.50',
+    category: '餐饮',
+    date: '2026-08-22',
+    note: '午饭',
+    paymentMethod: '微信',
+  }
+  assert.throws(() => createExpense({ ...draft, amount: String(MAX_EXPENSE_AMOUNT + 1) }, 'manual'))
+  assert.throws(() => createExpense({ ...draft, date: '' }, 'manual'))
 })
 
 test('导入同时按 id 与业务字段去重', () => {
@@ -97,6 +126,17 @@ test('存储存在性会分别识别缺失或损坏的账单与设置', () => {
   storage.setItem(EXPENSES_STORAGE_KEY, 'not-json')
   storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ monthlyBudget: 3000 }))
   assert.deepEqual(getStoredAppDataPresence(storage), { expenses: false, settings: true })
+})
+
+test('存储存在性会检查数组内部账单和设置字段', () => {
+  const storage = memoryStorage()
+  storage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify([expense(), { amount: -1 }]))
+  storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({ monthlyBudget: '很多' }))
+  assert.deepEqual(getStoredAppDataPresence(storage), { expenses: false, settings: false })
+
+  storage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify([]))
+  storage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({}))
+  assert.deepEqual(getStoredAppDataPresence(storage), { expenses: true, settings: true })
 })
 
 test('设置清洗会过滤无效预算和重复分类', () => {
