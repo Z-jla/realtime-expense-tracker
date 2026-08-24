@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Expense } from '../src/expenses.ts'
-import { decideOcrDocument, ocrReviewMessage } from '../src/ocr/decision.ts'
+import {
+  createOcrBatchExpenses,
+  decideOcrDocument,
+  ocrReviewMessage,
+} from '../src/ocr/decision.ts'
 import type {
   OcrDocument,
   ParsedOcrResult,
@@ -86,6 +90,17 @@ describe('OCR 入账决策', () => {
     const decision = decideOcrDocument(document(), parsed(transactions, true), [])
     expect(decision).toMatchObject({ kind: 'batch' })
     if (decision.kind === 'batch') expect(decision.transactions).toHaveLength(2)
+  })
+
+  it('保留同一截图中的相同交易行，但阻止再次导入已有账单', () => {
+    const duplicatedRows = [
+      transaction({ amount: 1, note: '快宝', sourceRow: '快宝 -1.00' }),
+      transaction({ amount: 1, note: '快宝', sourceRow: '快宝 -1.00' }),
+    ]
+
+    const firstImport = createOcrBatchExpenses(duplicatedRows, [])
+    expect(firstImport).toHaveLength(2)
+    expect(createOcrBatchExpenses(duplicatedRows, firstImport)).toHaveLength(0)
   })
 
   it('Tesseract 使用更严格的自动入账阈值', () => {

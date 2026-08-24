@@ -1,4 +1,12 @@
-import { isDuplicateDraft, moneyFormatter, type Draft, type Expense } from '../expenses.ts'
+import {
+  createExpense,
+  createExpenseKeySet,
+  draftKey,
+  isDuplicateDraft,
+  moneyFormatter,
+  type Draft,
+  type Expense,
+} from '../expenses.ts'
 import type { OcrDocument, ParsedOcrResult, ParsedTransaction } from './types.ts'
 
 type TransactionWithAmount = ParsedTransaction & { amount: number }
@@ -35,6 +43,27 @@ export function draftFromTransaction(transaction: ParsedTransaction): Draft {
     note: transaction.note,
     paymentMethod: transaction.paymentMethod,
   }
+}
+
+export function createOcrBatchExpenses(
+  transactions: ParsedTransaction[],
+  existingExpenses: Expense[],
+) {
+  const existingKeys = createExpenseKeySet(existingExpenses)
+  const added: Expense[] = []
+
+  for (const transaction of transactions) {
+    if (transaction.amount === null) continue
+    const draft = draftFromTransaction(transaction)
+    const key = draftKey(draft)
+    if (key === null || existingKeys.has(key)) continue
+
+    // Two visually separate rows can be legitimate charges with the same merchant, minute, and
+    // amount. Compare only with records that existed before this import, not earlier rows here.
+    added.push(createExpense(draft, 'screenshot', transaction.sourceRow))
+  }
+
+  return added
 }
 
 export function decideOcrDocument(

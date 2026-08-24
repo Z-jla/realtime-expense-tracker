@@ -33,9 +33,7 @@ import SettingsPanel from './components/SettingsPanel.tsx'
 import {
   availableCategories,
   createExpense,
-  createExpenseKeySet,
   defaultDraft,
-  draftKey,
   isValidExpenseAmount,
   isValidExpenseDate,
   MAX_EXPENSE_AMOUNT,
@@ -53,7 +51,11 @@ import {
   isNativeCapturePermissionDenied,
   type NativeCaptureSource,
 } from './ocr/capture.ts'
-import { decideOcrDocument, draftFromTransaction, ocrReviewMessage } from './ocr/decision.ts'
+import {
+  createOcrBatchExpenses,
+  decideOcrDocument,
+  ocrReviewMessage,
+} from './ocr/decision.ts'
 import { formatOcrReview, parseOcrDocument } from './ocr/parser.ts'
 import { recognizeExpenseImage, recognizeNativeExpenseImage } from './ocr/recognize.ts'
 import type { OcrDocument, OcrUiState } from './ocr/types.ts'
@@ -519,16 +521,7 @@ function App() {
       (candidate): candidate is BatchCandidate & { amount: number } =>
         candidate.selected && candidate.amount !== null,
     )
-    const knownKeys = createExpenseKeySet(expensesRef.current)
-    const added: Expense[] = []
-    for (const candidate of selected) {
-      const candidateDraft = draftFromTransaction(candidate)
-      const key = draftKey(candidateDraft)
-      if (key === null || knownKeys.has(key)) continue
-      knownKeys.add(key)
-      // 整篇文档文本对每一笔都相同，逐条保存会让存储膨胀数十倍；只留该行的原文。
-      added.push(createExpense(candidateDraft, 'screenshot', candidate.sourceRow))
-    }
+    const added = createOcrBatchExpenses(selected, expensesRef.current)
     if (added.length > 0) persistExpenses([...added, ...expensesRef.current])
     setOcrBatch([])
     pendingOcrTextRef.current = null
