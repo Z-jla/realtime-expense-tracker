@@ -337,17 +337,91 @@ function extractDate(text: string, now: Date) {
   const normalized = normalizeOcrText(text)
   const full = normalized.match(/(20\d{2})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?/)
   if (full) return validDate(Number(full[1]), Number(full[2]), Number(full[3]))
-  const short = normalized.match(/(?:^|\s)(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?(?:\s|$)/)
-  if (short) {
+  const shortDates = normalized.matchAll(
+    /(?:^|[^\d])(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*(?:日|曰|目)?/g,
+  )
+  for (const short of shortDates) {
     const month = Number(short[1])
     const day = Number(short[2])
     const thisYear = validDate(now.getFullYear(), month, day)
-    if (!thisYear) return null
+    if (!thisYear) continue
     return thisYear <= localDate(now)
       ? thisYear
       : validDate(now.getFullYear() - 1, month, day)
   }
   return null
+}
+
+function resolveBillListDates(
+  rows: LogicalRow[],
+  candidates: CandidateWithGeometry[],
+  now: Date,
+) {
+  type Assignment = { date: string; distance: number; below: boolean }
+  const assignments: Array<Assignment | null> = candidates.map(() => null)
+
+  for (const row of rows) {
+    const date = extractDate(row.text, now)
+    if (!date) continue
+
+    let nearestIndex = -1
+    let nearestDistance = Number.POSITIVE_INFINITY
+    for (let index = 0; index < candidates.length; index += 1) {
+      const distance = Math.abs(centerY(row.bounds) - centerY(candidates[index].row.bounds))
+      if (distance < nearestDistance) {
+        nearestIndex = index
+        nearestDistance = distance
+      }
+    }
+    if (nearestIndex < 0) continue
+
+    const existing = assignments[nearestIndex]
+    if (!existing || nearestDistance < existing.distance) {
+      assignments[nearestIndex] = {
+        date,
+        distance: nearestDistance,
+        below: centerY(row.bounds) >= centerY(candidates[nearestIndex].row.bounds),
+      }
+    }
+  }
+
+  const explicitAssignments = assignments.filter(
+    (assignment): assignment is Assignment => assignment !== null,
+  )
+  if (explicitAssignments.length === 0) return candidates.map(() => localDate(now))
+
+  const dates = assignments.map((assignment) => assignment?.date ?? null)
+  const datesMostlyBelow =
+    explicitAssignments.filter((assignment) => assignment.below).length * 2 >=
+    explicitAssignments.length
+
+  const fillDownward = () => {
+    let date: string | null = null
+    for (let index = 0; index < dates.length; index += 1) {
+      date = dates[index] ?? date
+      if (date) dates[index] = date
+    }
+  }
+  const fillUpward = () => {
+    let date: string | null = null
+    for (let index = dates.length - 1; index >= 0; index -= 1) {
+      date = dates[index] ?? date
+      if (date) dates[index] = date
+    }
+  }
+
+  // Per-transaction dates below an amount row describe the transaction above them. When one is
+  // missed, the next explicit date lower in a descending bill list is the safer inference. Date
+  // group headers above transactions use the opposite propagation direction.
+  if (datesMostlyBelow) {
+    fillUpward()
+    fillDownward()
+  } else {
+    fillDownward()
+    fillUpward()
+  }
+
+  return dates.map((date) => date ?? localDate(now))
 }
 
 function nearestDate(rows: LogicalRow[], rowIndex: number, now: Date) {
@@ -426,10 +500,13 @@ function makeTransaction(
   alternatives: CandidateWithGeometry[],
   now: Date,
   sourceRow?: string,
+  resolvedDate?: string,
 ): ParsedTransaction {
   const relevantText = sourceRow ?? document.text
   const direction = inferDirection(relevantText || document.text, candidate?.signed)
-  const date = candidate ? nearestDate(rows, candidate.rowIndex, now) : extractDate(document.text, now)
+  const date =
+    resolvedDate ??
+    (candidate ? nearestDate(rows, candidate.rowIndex, now) : extractDate(document.text, now))
   const merchant = sourceRow ? cleanListNote(sourceRow) : extractMerchant(rows, document.text)
   const warnings: string[] = []
   const second = alternatives.find((item) => candidate && item.value !== candidate.value)
@@ -479,7 +556,7 @@ export function parseOcrDocument(document: OcrDocument, now = new Date()): Parse
 
   if (isBillList) {
     const seenRows = new Set<number>()
-    const transactions = signedExpenseCandidates
+    const listCandidates = signedExpenseCandidates
       .filter((candidate) => {
         if (seenRows.has(candidate.rowIndex)) return false
         seenRows.add(candidate.rowIndex)
@@ -487,9 +564,18 @@ export function parseOcrDocument(document: OcrDocument, now = new Date()): Parse
       })
       .sort((first, second) => first.row.bounds.top - second.row.bounds.top)
       .slice(0, 30)
-      .map((candidate) =>
-        makeTransaction(document, rows, candidate, [candidate], now, candidate.rowText),
+    const resolvedDates = resolveBillListDates(rows, listCandidates, now)
+    const transactions = listCandidates.map((candidate, index) =>
+      makeTransaction(
+        document,
+        rows,
+        candidate,
+        [candidate],
+        now,
+        candidate.rowText,
+        resolvedDates[index],
       )
+    )
     return { transactions, isBillList: true, documentConfidence }
   }
 

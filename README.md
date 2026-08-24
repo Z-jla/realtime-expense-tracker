@@ -122,14 +122,14 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 debug APK 可以直接安装到 Android 手机。安装时如果系统提示未知来源应用，需要允许当前文件管理器或浏览器安装应用。
 
-Android 构建仅包含 `arm64-v8a` 和 `armeabi-v7a`，不会打入模拟器用的 x86/x86_64 原生库，也不会复制 Web 版 Tesseract 资源。官方 OpenCV 4.12.0 的 64 位原生库支持 Android 16 KB page size；CI 会运行 Android Lint 和 `zipalign -P 16` 防止回归。
+Android 构建仅包含 `arm64-v8a` 和 `armeabi-v7a`，不会打入模拟器用的 x86/x86_64 原生库，也不会复制 Web 版 Tesseract 资源。官方 OpenCV 4.12.0 的 64 位原生库支持 Android 16 KB page size；CI 会运行 Android Lint 和 `zipalign -P 16` 防止回归。原生包不会注册网页端的 PWA Service Worker；从旧版本覆盖安装时会清除旧 Workbox 缓存并重载一次，同时保留 localStorage 中的账单和设置。
 
 ### 正式签名与版本
 
-默认开发版本为 `versionCode 5` / `versionName 1.1.3`。CI 或发布机可通过环境变量覆盖：
+默认开发版本为 `versionCode 7` / `versionName 1.1.5`。CI 或发布机可通过环境变量覆盖：
 
 ```powershell
-$env:SPEND_APP_VERSION_CODE = '6'
+$env:SPEND_APP_VERSION_CODE = '8'
 $env:SPEND_APP_VERSION_NAME = '1.2.0'
 $env:SPEND_RELEASE_STORE_FILE = 'C:\secure\spend-release.jks'
 $env:SPEND_RELEASE_STORE_PASSWORD = '...'
