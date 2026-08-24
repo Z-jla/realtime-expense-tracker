@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Expense } from '../src/expenses.ts'
 import {
-  createOcrBatchExpenses,
   decideOcrDocument,
   ocrReviewMessage,
+  reconcileOcrBatchExpenses,
 } from '../src/ocr/decision.ts'
 import type {
   OcrDocument,
@@ -45,7 +45,7 @@ function parsed(
   return { transactions, isBillList, documentConfidence: 0.96 }
 }
 
-function expense(): Expense {
+function expense(overrides: Partial<Expense> = {}): Expense {
   return {
     id: 'existing',
     amount: 25,
@@ -55,6 +55,7 @@ function expense(): Expense {
     paymentMethod: '微信',
     source: 'manual',
     createdAt: '2026-08-22T04:00:00.000Z',
+    ...overrides,
   }
 }
 
@@ -98,9 +99,88 @@ describe('OCR 入账决策', () => {
       transaction({ amount: 1, note: '快宝', sourceRow: '快宝 -1.00' }),
     ]
 
-    const firstImport = createOcrBatchExpenses(duplicatedRows, [])
+    const firstImport = reconcileOcrBatchExpenses(duplicatedRows, []).added
     expect(firstImport).toHaveLength(2)
-    expect(createOcrBatchExpenses(duplicatedRows, firstImport)).toHaveLength(0)
+    expect(reconcileOcrBatchExpenses(duplicatedRows, firstImport.slice(0, 1)).added).toHaveLength(1)
+    expect(reconcileOcrBatchExpenses(duplicatedRows, firstImport).added).toHaveLength(0)
+  })
+
+  it('再次导入同一截图时修正旧版保存错的日期', () => {
+    const sourceRow = '扫二维码付款-给随缘 -15.00'
+    const existing = expense({
+      amount: 15,
+      date: '2026-08-24',
+      note: '扫二维码付款-给随缘',
+      paymentMethod: '银行卡',
+      source: 'screenshot',
+      rawText: sourceRow,
+    })
+    const corrected = [
+      transaction({
+        amount: 15,
+        date: '2026-08-22',
+        note: '扫二维码付款-给随缘',
+        paymentMethod: '银行卡',
+        sourceRow,
+      }),
+      transaction({
+        amount: 6,
+        date: '2026-08-22',
+        note: '诚新烟酒经营部',
+        paymentMethod: '银行卡',
+        sourceRow: '诚新烟酒经营部 -6.00',
+      }),
+      transaction({
+        amount: 19.8,
+        date: '2026-08-24',
+        note: '北京艾斯酷科技有限公司',
+        paymentMethod: '银行卡',
+        sourceRow: '北京艾斯酷科技有限公司 -19.80',
+      }),
+    ]
+    const matchingExisting = corrected.slice(1).map((item, index) =>
+      expense({
+        id: `matching-${index}`,
+        amount: item.amount ?? 1,
+        date: item.date,
+        note: item.note,
+        paymentMethod: item.paymentMethod,
+        source: 'screenshot',
+        rawText: item.sourceRow,
+      }),
+    )
+
+    const result = reconcileOcrBatchExpenses(corrected, [existing, ...matchingExisting])
+    expect(result.added).toHaveLength(0)
+    expect(result.updated).toBe(1)
+    expect(result.updatedExpenses[0]).toMatchObject({
+      id: existing.id,
+      date: '2026-08-22',
+    })
+  })
+
+  it('不会用另一张截图的相似交易改写历史日期', () => {
+    const sourceRow = '快宝 -1.00'
+    const existing = expense({
+      amount: 1,
+      date: '2026-08-22',
+      note: '快宝',
+      paymentMethod: '银行卡',
+      source: 'screenshot',
+      rawText: sourceRow,
+    })
+    const laterTransaction = transaction({
+      amount: 1,
+      date: '2026-08-23',
+      note: '快宝',
+      paymentMethod: '银行卡',
+      sourceRow,
+    })
+
+    const result = reconcileOcrBatchExpenses([laterTransaction], [existing])
+    expect(result.added).toHaveLength(1)
+    expect(result.updated).toBe(0)
+    expect(result.updatedExpenses[0].date).toBe('2026-08-22')
   })
 
   it('Tesseract 使用更严格的自动入账阈值', () => {

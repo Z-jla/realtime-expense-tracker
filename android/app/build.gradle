@@ -1,8 +1,8 @@
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
 
-def appVersionCodeValue = (System.getenv('SPEND_APP_VERSION_CODE') ?: '4').toInteger()
-def appVersionNameValue = System.getenv('SPEND_APP_VERSION_NAME') ?: '1.1.2'
+def appVersionCodeValue = (System.getenv('SPEND_APP_VERSION_CODE') ?: '5').toInteger()
+def appVersionNameValue = System.getenv('SPEND_APP_VERSION_NAME') ?: '1.1.3'
 def releaseStorePath = System.getenv('SPEND_RELEASE_STORE_FILE')
 def releaseStorePassword = System.getenv('SPEND_RELEASE_STORE_PASSWORD')
 def releaseKeyAlias = System.getenv('SPEND_RELEASE_KEY_ALIAS')

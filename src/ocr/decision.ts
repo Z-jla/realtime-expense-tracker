@@ -1,7 +1,7 @@
 import {
   createExpense,
-  createExpenseKeySet,
   draftKey,
+  expenseKey,
   isDuplicateDraft,
   moneyFormatter,
   type Draft,
@@ -45,25 +45,110 @@ export function draftFromTransaction(transaction: ParsedTransaction): Draft {
   }
 }
 
-export function createOcrBatchExpenses(
+export type OcrBatchReconciliation = {
+  added: Expense[]
+  updatedExpenses: Expense[]
+  updated: number
+}
+
+function normalizedIdentityText(value: string | undefined) {
+  return value?.replace(/\s+/g, ' ').trim().toLowerCase() ?? ''
+}
+
+function matchesOcrSource(expense: Expense, draft: Draft, sourceRow: string | undefined) {
+  const normalizedSourceRow = normalizedIdentityText(sourceRow)
+  return (
+    normalizedSourceRow.length > 0 &&
+    expense.source === 'screenshot' &&
+    normalizedIdentityText(expense.rawText) === normalizedSourceRow &&
+    expense.amount.toFixed(2) === draft.amount &&
+    normalizedIdentityText(expense.note) === normalizedIdentityText(draft.note) &&
+    expense.paymentMethod === draft.paymentMethod
+  )
+}
+
+function hasExistingScreenshotOverlap(
   transactions: ParsedTransaction[],
   existingExpenses: Expense[],
 ) {
-  const existingKeys = createExpenseKeySet(existingExpenses)
+  const eligible = transactions.filter((transaction) => transaction.amount !== null)
+  if (eligible.length < 3) return false
+
+  const unmatchedIndexes = new Set(existingExpenses.map((_, index) => index))
+  let matches = 0
+  for (const transaction of eligible) {
+    const draft = draftFromTransaction(transaction)
+    const index = existingExpenses.findIndex(
+      (expense, expenseIndex) =>
+        unmatchedIndexes.has(expenseIndex) &&
+        matchesOcrSource(expense, draft, transaction.sourceRow),
+    )
+    if (index < 0) continue
+    unmatchedIndexes.delete(index)
+    matches += 1
+  }
+
+  return matches >= Math.ceil(eligible.length * 0.6)
+}
+
+export function reconcileOcrBatchExpenses(
+  transactions: ParsedTransaction[],
+  existingExpenses: Expense[],
+): OcrBatchReconciliation {
+  const updatedExpenses = [...existingExpenses]
+  const unmatchedIndexes = new Set(existingExpenses.map((_, index) => index))
   const added: Expense[] = []
+  let updated = 0
+  const canRepairDates = hasExistingScreenshotOverlap(transactions, existingExpenses)
 
   for (const transaction of transactions) {
     if (transaction.amount === null) continue
     const draft = draftFromTransaction(transaction)
     const key = draftKey(draft)
-    if (key === null || existingKeys.has(key)) continue
+    if (key === null) continue
 
-    // Two visually separate rows can be legitimate charges with the same merchant, minute, and
-    // amount. Compare only with records that existed before this import, not earlier rows here.
+    const sameSourceAndDateIndex = updatedExpenses.findIndex(
+      (expense, index) =>
+        unmatchedIndexes.has(index) &&
+        expense.date === draft.date &&
+        matchesOcrSource(expense, draft, transaction.sourceRow),
+    )
+    if (sameSourceAndDateIndex >= 0) {
+      unmatchedIndexes.delete(sameSourceAndDateIndex)
+      continue
+    }
+
+    const repairableSourceIndex = canRepairDates
+      ? updatedExpenses.findIndex(
+          (expense, index) =>
+            unmatchedIndexes.has(index) &&
+            matchesOcrSource(expense, draft, transaction.sourceRow),
+        )
+      : -1
+    if (repairableSourceIndex >= 0) {
+      const sourceMatch = updatedExpenses[repairableSourceIndex]
+      if (sourceMatch.date !== draft.date) {
+        updatedExpenses[repairableSourceIndex] = { ...sourceMatch, date: draft.date }
+        updated += 1
+      }
+      unmatchedIndexes.delete(repairableSourceIndex)
+      continue
+    }
+
+    const exactMatchIndex = updatedExpenses.findIndex(
+      (expense, index) => unmatchedIndexes.has(index) && expenseKey(expense) === key,
+    )
+    if (exactMatchIndex >= 0) {
+      unmatchedIndexes.delete(exactMatchIndex)
+      continue
+    }
+
+    // Matching each existing index only once preserves repeated real charges while still making a
+    // second import idempotent.
     added.push(createExpense(draft, 'screenshot', transaction.sourceRow))
   }
 
-  return added
+  return { added, updatedExpenses, updated }
 }
 
 export function decideOcrDocument(

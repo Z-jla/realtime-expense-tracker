@@ -52,9 +52,9 @@ import {
   type NativeCaptureSource,
 } from './ocr/capture.ts'
 import {
-  createOcrBatchExpenses,
   decideOcrDocument,
   ocrReviewMessage,
+  reconcileOcrBatchExpenses,
 } from './ocr/decision.ts'
 import { formatOcrReview, parseOcrDocument } from './ocr/parser.ts'
 import { recognizeExpenseImage, recognizeNativeExpenseImage } from './ocr/recognize.ts'
@@ -521,17 +521,26 @@ function App() {
       (candidate): candidate is BatchCandidate & { amount: number } =>
         candidate.selected && candidate.amount !== null,
     )
-    const added = createOcrBatchExpenses(selected, expensesRef.current)
-    if (added.length > 0) persistExpenses([...added, ...expensesRef.current])
+    const { added, updatedExpenses, updated } = reconcileOcrBatchExpenses(
+      selected,
+      expensesRef.current,
+    )
+    const changed = added.length > 0 || updated > 0
+    if (changed) persistExpenses([...added, ...updatedExpenses])
+    let resultMessage = '没有新增记录：未勾选项目或所选项目均已存在。'
+    if (added.length > 0 && updated > 0) {
+      resultMessage = `已新增 ${added.length} 笔支出并修正 ${updated} 笔日期，其余重复项已跳过。`
+    } else if (added.length > 0) {
+      resultMessage = `已批量记录 ${added.length} 笔支出${added.length < selected.length ? '，重复项已跳过' : ''}。`
+    } else if (updated > 0) {
+      resultMessage = `已修正 ${updated} 笔截图账单的日期，其余记录未重复添加。`
+    }
     setOcrBatch([])
     pendingOcrTextRef.current = null
     setOcr((current) => ({
       ...current,
-      status: added.length > 0 ? 'saved' : 'needs-review',
-      message:
-        added.length > 0
-          ? `已批量记录 ${added.length} 笔支出${added.length < selected.length ? '，重复项已跳过' : ''}。`
-          : '没有新增记录：未勾选项目或所选项目均已存在。',
+      status: changed ? 'saved' : 'needs-review',
+      message: resultMessage,
     }))
   }
 
