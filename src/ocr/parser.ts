@@ -31,6 +31,9 @@ const STRONG_AMOUNT_ANCHOR = /(实付|实际支付|支付金额|付款金额|付
 const MEDIUM_AMOUNT_ANCHOR = /(合计|总计|总金额|应付|交易金额|订单金额|消费金额|支出|转账金额)/
 const NEGATIVE_AMOUNT_CONTEXT = /(优惠|折扣|减免|原价|余额|剩余|积分|红包|找零|手续费|收入|退款|退回)/
 const BILL_LIST_UI = /(账单|全部账单|交易记录|月账单|收支统计|查找交易)/
+const PAYMENT_CARD_STATUS = /(付款成功|支付成功|交易成功|扣款成功)/
+const PAYMENT_CARD_DETAIL = /(查看详情|交易详情)/
+const PAYMENT_CARD_METHOD = /(付款方式|支付方式)/
 const MONEY_PATTERN = /(?:[¥￥]\s*)?([+-]?\s*(?:\d{1,3}(?:,\d{3})+|\d{1,6})(?:[.,]\d{1,2})?)(?:\s*(?:元|rmb|cny))?/gi
 
 const categoryRules: Array<[string, RegExp]> = [
@@ -493,6 +496,138 @@ function uniqueCandidates(candidates: CandidateWithGeometry[]) {
   return [...byValue.values()].sort((first, second) => second.confidence - first.confidence)
 }
 
+type PaymentCardCandidate = {
+  candidate: CandidateWithGeometry
+  sourceRow: string
+  merchant: string
+}
+
+function extractPaymentCardMerchant(
+  regionRows: LogicalRow[],
+  amountRowIndex: number,
+  anchorY: number,
+  now: Date,
+) {
+  const excludedUi =
+    /(服务消息|支付消息|付款成功|支付成功|交易成功|扣款成功|查看详情|交易详情|付款方式|支付方式|交易对象|订单号|商户单号|收支统计|账单|今天|昨天|前天|星期|周[一二三四五六日天])/
+
+  return (
+    regionRows
+      .filter((row) => centerY(row.bounds) < anchorY && row.index !== amountRowIndex)
+      // A date and a logo caption can be merged into one logical row. Excluding that whole row
+      // avoids treating captions such as “中国铁路” as the merchant of the next payment card.
+      .filter((row) => !extractDate(row.text, now))
+      .map((row) => row.text.replace(/\s+/g, ' ').trim())
+      .filter(
+        (text) =>
+          text.length >= 2 &&
+          text.length <= 60 &&
+          !excludedUi.test(text) &&
+          !/[¥￥]/.test(text) &&
+          !/^[-+]?\s*\d+(?:[.,]\d{1,2})?\s*元?$/.test(text) &&
+          /[\u4e00-\u9fa5A-Za-z]/.test(text),
+      )
+      .at(-1) ?? ''
+  )
+}
+
+function extractPaymentCardCandidates(
+  document: OcrDocument,
+  rows: LogicalRow[],
+  allCandidates: CandidateWithGeometry[],
+  now: Date,
+): PaymentCardCandidate[] {
+  const statusRows = rows.filter((row) => PAYMENT_CARD_STATUS.test(row.text))
+  const detailRows = rows.filter((row) => PAYMENT_CARD_DETAIL.test(row.text))
+  const methodRows = rows.filter((row) => PAYMENT_CARD_METHOD.test(row.text))
+
+  // A normal payment detail can contain several monetary values. Only switch to card-list mode
+  // when the repeated status/detail structure itself appears at least twice.
+  if (statusRows.length < 2 || (detailRows.length < 2 && methodRows.length < 2)) return []
+
+  const medianHeight = median(rows.map((row) => heightOf(row.bounds)))
+  const proximity = Math.max(medianHeight * 4, document.height * 0.065)
+  const eligible = allCandidates
+    .filter((candidate) => /[¥￥元]|[.,]\d{1,2}(?:\D|$)/i.test(candidate.text))
+    .map(
+      (candidate): {
+        candidate: CandidateWithGeometry
+        status: LogicalRow
+        detail: LogicalRow | null
+      } | null => {
+        const amountY = centerY(candidate.row.bounds)
+        const status = statusRows
+          .map((row) => ({ row, gap: amountY - centerY(row.bounds) }))
+          .filter(({ gap }) => gap >= -medianHeight && gap <= proximity)
+          .sort((first, second) => Math.abs(first.gap) - Math.abs(second.gap))[0]
+        if (!status) return null
+
+        const detail = detailRows
+          .map((row) => ({ row, gap: centerY(row.bounds) - amountY }))
+          .filter(({ gap }) => gap >= -medianHeight && gap <= proximity)
+          .sort((first, second) => Math.abs(first.gap) - Math.abs(second.gap))[0]
+        return { candidate, status: status.row, detail: detail?.row ?? null }
+      },
+    )
+    .filter(
+      (
+        item,
+      ): item is {
+        candidate: CandidateWithGeometry
+        status: LogicalRow
+        detail: LogicalRow | null
+      } => item !== null,
+    )
+
+  // Keep one amount for each repeated payment-status block. Proximity to both the status and
+  // “查看详情” wins over unrelated balances or discounts that happen to be nearby.
+  const byStatus = new Map<number, (typeof eligible)[number]>()
+  for (const item of eligible) {
+    const existing = byStatus.get(item.status.index)
+    const score =
+      item.candidate.confidence +
+      (item.detail ? 0.2 : 0) -
+      Math.abs(centerY(item.candidate.row.bounds) - centerY(item.status.bounds)) /
+        Math.max(proximity, 1)
+    const existingScore = existing
+      ? existing.candidate.confidence +
+        (existing.detail ? 0.2 : 0) -
+        Math.abs(centerY(existing.candidate.row.bounds) - centerY(existing.status.bounds)) /
+          Math.max(proximity, 1)
+      : Number.NEGATIVE_INFINITY
+    if (score > existingScore) byStatus.set(item.status.index, item)
+  }
+
+  const cards = [...byStatus.values()].sort(
+    (first, second) => first.candidate.row.bounds.top - second.candidate.row.bounds.top,
+  )
+  if (cards.length < 2) return []
+
+  return cards.map((card, index) => {
+    const previous = cards[index - 1]?.candidate
+    const next = cards[index + 1]?.candidate
+    const amountY = centerY(card.candidate.row.bounds)
+    const regionTop = previous
+      ? (centerY(previous.row.bounds) + amountY) / 2
+      : Number.NEGATIVE_INFINITY
+    const regionBottom = next
+      ? (amountY + centerY(next.row.bounds)) / 2
+      : Number.POSITIVE_INFINITY
+    const regionRows = rows.filter((row) => {
+      const rowY = centerY(row.bounds)
+      return rowY >= regionTop && rowY < regionBottom
+    })
+    const sourceRow = regionRows.map((row) => row.text).join(' ')
+    const merchant = extractPaymentCardMerchant(
+      regionRows,
+      card.candidate.rowIndex,
+      Math.min(amountY, centerY(card.status.bounds)),
+      now,
+    )
+    return { candidate: card.candidate, sourceRow, merchant }
+  })
+}
+
 function makeTransaction(
   document: OcrDocument,
   rows: LogicalRow[],
@@ -501,13 +636,15 @@ function makeTransaction(
   now: Date,
   sourceRow?: string,
   resolvedDate?: string,
+  resolvedMerchant?: string,
 ): ParsedTransaction {
   const relevantText = sourceRow ?? document.text
   const direction = inferDirection(relevantText || document.text, candidate?.signed)
   const date =
     resolvedDate ??
     (candidate ? nearestDate(rows, candidate.rowIndex, now) : extractDate(document.text, now))
-  const merchant = sourceRow ? cleanListNote(sourceRow) : extractMerchant(rows, document.text)
+  const merchant =
+    resolvedMerchant ?? (sourceRow ? cleanListNote(sourceRow) : extractMerchant(rows, document.text))
   const warnings: string[] = []
   const second = alternatives.find((item) => candidate && item.value !== candidate.value)
 
@@ -545,6 +682,7 @@ function makeTransaction(
 export function parseOcrDocument(document: OcrDocument, now = new Date()): ParsedOcrResult {
   const rows = buildRows(document)
   const allCandidates = extractAmountCandidates(document, rows)
+  const paymentCardCandidates = extractPaymentCardCandidates(document, rows, allCandidates, now)
   const signedExpenseCandidates = allCandidates.filter(
     (candidate) => candidate.signed && inferDirection(candidate.rowText, true) === 'expense',
   )
@@ -553,6 +691,24 @@ export function parseOcrDocument(document: OcrDocument, now = new Date()): Parse
     signedExpenseCandidates.length >= 3
   const documentConfidence =
     document.lines.reduce((sum, line) => sum + line.confidence, 0) / Math.max(document.lines.length, 1)
+
+  if (paymentCardCandidates.length >= 2) {
+    const candidates = paymentCardCandidates.map((card) => card.candidate)
+    const resolvedDates = resolveBillListDates(rows, candidates, now)
+    const transactions = paymentCardCandidates.map((card, index) =>
+      makeTransaction(
+        document,
+        rows,
+        card.candidate,
+        [card.candidate],
+        now,
+        card.sourceRow,
+        resolvedDates[index],
+        card.merchant,
+      ),
+    )
+    return { transactions, isBillList: true, documentConfidence }
+  }
 
   if (isBillList) {
     const seenRows = new Set<number>()
