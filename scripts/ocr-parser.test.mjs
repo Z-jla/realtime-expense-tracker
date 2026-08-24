@@ -94,6 +94,88 @@ test('账单列表只提取支出并返回多笔候选', () => {
   assert.ok(parsed.transactions.every((item) => item.direction === 'expense'))
 })
 
+test('账单列表兼容 PP-OCR 输出的全角与上下标收支符号', () => {
+  const parsed = parseOcrDocument(
+    document([
+      line('全部账单', 420, 40, 240),
+      line('北京艾斯酷科技有限公司 －１９．８０', 80, 180, 900),
+      line('扫二维码付款-给随缘 ⁻15.00', 80, 270, 900),
+      line('诚新烟酒经营部 ₋6.00', 80, 360, 900),
+      line('工资 ＋100.00', 80, 450, 900),
+    ]),
+    NOW,
+  )
+
+  assert.equal(parsed.isBillList, true)
+  assert.deepEqual(
+    parsed.transactions.map((item) => item.amount),
+    [19.8, 15, 6],
+  )
+  assert.deepEqual(
+    parsed.transactions.map((item) => item.note),
+    ['北京艾斯酷科技有限公司', '扫二维码付款-给随缘', '诚新烟酒经营部'],
+  )
+  assert.ok(parsed.transactions.every((item) => item.direction === 'expense'))
+})
+
+test('银行卡账单长截图忽略月度统计并提取八笔可见支出', () => {
+  const screenshotNow = new Date(2026, 7, 24, 11, 7, 0)
+  const parsed = parseOcrDocument(
+    document([
+      line('全部账单 查找交易 收支统计', 80, 40, 900),
+      line('2026年8月 支出￥12210.53 收入￥100.00', 80, 110, 900),
+      line('北京艾斯酷科技有限公司', 180, 240, 600),
+      line('－１９．８０', 850, 240, 180),
+      line('8月24日 10:07', 180, 290, 360),
+      line('扫二维码付款-给随缘', 180, 400, 600),
+      line('−15.00', 850, 400, 180),
+      line('8月22日 10:45', 180, 450, 360),
+      line('诚新烟酒经营部', 180, 560, 600),
+      line('－6.00', 850, 560, 180),
+      line('8月22日 10:28', 180, 610, 360),
+      line('老桥理发店', 180, 720, 600),
+      line('⁻15.00', 850, 720, 180),
+      line('8月22日 10:01', 180, 770, 360),
+      line('快宝', 180, 880, 600),
+      line('₋1.00', 850, 880, 180),
+      line('8月22日 08:52', 180, 930, 360),
+      line('快宝', 180, 1040, 600),
+      line('﹣1.00', 850, 1040, 180),
+      line('8月22日 08:52', 180, 1090, 360),
+      line('内江市东兴区城乡公共交通', 180, 1200, 600),
+      line('–16.00', 850, 1200, 180),
+      line('8月22日 07:47', 180, 1250, 360),
+      line('迅驰出行', 180, 1360, 600),
+      line('—0.99', 850, 1360, 180),
+      line('8月21日 20:55', 180, 1410, 360),
+    ]),
+    screenshotNow,
+  )
+
+  assert.equal(parsed.isBillList, true)
+  assert.deepEqual(
+    parsed.transactions.map((item) => item.amount),
+    [19.8, 15, 6, 15, 1, 1, 16, 0.99],
+  )
+  assert.equal(
+    parsed.transactions.reduce((sum, item) => sum + (item.amount ?? 0), 0).toFixed(2),
+    '74.79',
+  )
+  assert.deepEqual(
+    parsed.transactions.map((item) => item.date),
+    [
+      '2026-08-24',
+      '2026-08-22',
+      '2026-08-22',
+      '2026-08-22',
+      '2026-08-22',
+      '2026-08-22',
+      '2026-08-22',
+      '2026-08-21',
+    ],
+  )
+})
+
 test('余额不会覆盖邻近的实付金额', () => {
   const parsed = parseOcrDocument(
     document([

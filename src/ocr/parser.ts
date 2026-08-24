@@ -60,9 +60,10 @@ export function normalizeOcrText(text: string) {
   return text
     .replace(/[０-９]/g, (character) => String(fullWidthDigits.indexOf(character)))
     .replace(/[，]/g, ',')
-    .replace(/[。]/g, '.')
+    .replace(/[。．﹒]/g, '.')
     .replace(/[￥]/g, '¥')
-    .replace(/[−–—]/g, '-')
+    .replace(/[−–—―‐‑‒﹣－⁻₋]/g, '-')
+    .replace(/[＋﹢⁺₊]/g, '+')
     .replace(/(^|\s)一\s*(?=\d)/g, '$1-')
 }
 
@@ -351,7 +352,9 @@ function extractDate(text: string, now: Date) {
 
 function nearestDate(rows: LogicalRow[], rowIndex: number, now: Date) {
   for (let distance = 0; distance <= 4; distance += 1) {
-    for (const index of [rowIndex - distance, rowIndex + distance]) {
+    // 账单列表通常把日期放在商户/金额的下一行。同距离时先看下方，避免把
+    // 上一笔交易的日期错误套到当前交易；上方日期标题仍作为后备。
+    for (const index of [rowIndex + distance, rowIndex - distance]) {
       const row = rows[index]
       if (!row) continue
       const date = extractDate(row.text, now)

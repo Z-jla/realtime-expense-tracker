@@ -126,7 +126,7 @@ Android 构建仅包含 `arm64-v8a` 和 `armeabi-v7a`，不会打入模拟器用
 
 ### 正式签名与版本
 
-默认开发版本为 `versionCode 2` / `versionName 1.1.0`。CI 或发布机可通过环境变量覆盖：
+默认开发版本为 `versionCode 3` / `versionName 1.1.1`。CI 或发布机可通过环境变量覆盖：
 
 ```powershell
 $env:SPEND_APP_VERSION_CODE = '3'
