@@ -1,5 +1,14 @@
 import { Capacitor } from '@capacitor/core'
-import { Images, Pencil, RotateCcw } from 'lucide-react'
+import {
+  BarChart3,
+  ChevronDown,
+  CirclePlus,
+  Images,
+  ReceiptText,
+  RotateCcw,
+  ScanText,
+  Settings2,
+} from 'lucide-react'
 import {
   type ChangeEvent,
   type FormEvent,
@@ -57,6 +66,15 @@ import {
 } from './storage.ts'
 import { useToday } from './useToday.ts'
 
+function formatHeaderDate(value: string) {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+  }).format(new Date(year, month - 1, day))
+}
+
 function App() {
   const today = useToday()
   const currentMonth = today.slice(0, 7)
@@ -79,6 +97,7 @@ function App() {
     message: string
   } | null>(null)
   const [storageError, setStorageError] = useState<string | null>(null)
+  const [activeSection, setActiveSection] = useState('overview')
   const [ocr, setOcr] = useState<OcrUiState>({
     status: 'idle',
     message: '上传支付截图或购物小票，高置信度支出会自动入账，其余先请你确认。',
@@ -529,17 +548,28 @@ function App() {
     setOcr((current) => ({ ...current, message: '已取消本次批量导入。' }))
   }
 
+  const scrollToSection = (sectionId: string) => {
+    setActiveSection(sectionId)
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">实时个人记账</p>
-          <h1>我的账本</h1>
+      <header className="topbar" id="overview">
+        <div className="brand-lockup">
+          <span className="brand-mark" aria-hidden="true">
+            <img src="/favicon.svg" alt="" />
+          </span>
+          <div>
+            <h1>实时记账</h1>
+            <p className="eyebrow">{formatHeaderDate(today)}</p>
+          </div>
         </div>
         <button
           className="icon-button"
           type="button"
           title="从相册选择截图"
+          aria-label="从相册选择截图"
           disabled={ocr.status === 'reading'}
           onClick={() => openImageSource('photos')}
         >
@@ -605,10 +635,52 @@ function App() {
 
       {ocr.rawText ? (
         <details className="ocr-details">
-          <summary><Pencil size={16} />查看最近一次识别文本</summary>
+          <summary>
+            <span><ScanText size={17} />查看最近一次识别文本</span>
+            <ChevronDown className="details-chevron" size={17} />
+          </summary>
           <pre>{ocr.rawText}</pre>
         </details>
       ) : null}
+
+      <nav className="bottom-nav" aria-label="页面快捷导航">
+        <button
+          className={activeSection === 'overview' ? 'is-active' : undefined}
+          type="button"
+          aria-current={activeSection === 'overview' ? 'page' : undefined}
+          onClick={() => scrollToSection('overview')}
+        >
+          <BarChart3 size={20} />
+          <span>概览</span>
+        </button>
+        <button
+          className={activeSection === 'entry' ? 'is-active' : undefined}
+          type="button"
+          aria-current={activeSection === 'entry' ? 'page' : undefined}
+          onClick={() => scrollToSection('entry')}
+        >
+          <CirclePlus size={21} />
+          <span>记账</span>
+        </button>
+        <button
+          className={activeSection === 'records' ? 'is-active' : undefined}
+          type="button"
+          aria-current={activeSection === 'records' ? 'page' : undefined}
+          onClick={() => scrollToSection('records')}
+        >
+          <ReceiptText size={20} />
+          <span>账单</span>
+        </button>
+        <button
+          className={activeSection === 'settings' ? 'is-active' : undefined}
+          type="button"
+          aria-current={activeSection === 'settings' ? 'page' : undefined}
+          onClick={() => scrollToSection('settings')}
+        >
+          <Settings2 size={20} />
+          <span>设置</span>
+        </button>
+      </nav>
 
       {recentlyDeleted ? (
         <div className="undo-toast" role="status" aria-live="polite">

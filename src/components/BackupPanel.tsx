@@ -89,7 +89,10 @@ export default function BackupPanel({
   return (
     <section className="backup-section">
       <div className="section-title">
-        <h2>数据备份</h2>
+        <div>
+          <span className="section-kicker">数据安全</span>
+          <h2>备份与恢复</h2>
+        </div>
         <span>{expenses.length} 笔</span>
       </div>
       <input

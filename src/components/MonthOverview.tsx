@@ -95,19 +95,34 @@ function MonthOverview({
       </div>
 
       <div className="overview-main">
-        <span>{monthLabel(monthKey)}支出</span>
+        <span>{monthKey === currentMonth ? '本月已支出' : `${monthLabel(monthKey)}支出`}</span>
         <strong>{moneyFormatter.format(monthTotal)}</strong>
         <p>
           {topCategory
-            ? `最多花在${topCategory[0]}，共 ${moneyFormatter.format(topCategory[1])}`
+            ? `主要支出 · ${topCategory[0]} ${moneyFormatter.format(topCategory[1])}`
             : '这个月还没有支出记录'}
         </p>
+      </div>
+
+      <div className="overview-metrics">
+        <div>
+          <span>今日支出</span>
+          <strong>{moneyFormatter.format(todayTotal)}</strong>
+        </div>
+        <div>
+          <span>日均支出</span>
+          <strong>{moneyFormatter.format(averageDaily)}</strong>
+        </div>
+        <div>
+          <span>本月账单</span>
+          <strong>{monthExpenses.length} 笔</strong>
+        </div>
       </div>
 
       {monthlyBudget ? (
         <div className={`budget-status ${budgetRatio > 1 ? 'is-over' : ''}`}>
           <div>
-            <span>月预算 {moneyFormatter.format(monthlyBudget)}</span>
+            <span>预算已用 {Math.round(budgetRatio * 100)}%</span>
             <strong>
               {remaining !== null && remaining >= 0
                 ? `剩余 ${moneyFormatter.format(remaining)}`
@@ -119,21 +134,6 @@ function MonthOverview({
           </div>
         </div>
       ) : null}
-
-      <div className="overview-metrics">
-        <div>
-          <span>今日</span>
-          <strong>{moneyFormatter.format(todayTotal)}</strong>
-        </div>
-        <div>
-          <span>日均</span>
-          <strong>{moneyFormatter.format(averageDaily)}</strong>
-        </div>
-        <div>
-          <span>本月笔数</span>
-          <strong>{monthExpenses.length}</strong>
-        </div>
-      </div>
     </section>
   )
 }

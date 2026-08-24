@@ -2,6 +2,15 @@
 
 手机优先的个人支出记账应用。支持手动记账、微信/支付宝/银行卡消费截图 OCR 自动入账、月度分类统计，并可打包成 Android APK。
 
+## 界面预览
+
+<p align="center">
+  <img src="docs/screenshots/app-light.png" alt="实时记账浅色模式界面" width="320" />
+  <img src="docs/screenshots/app-dark.png" alt="实时记账深色模式界面" width="320" />
+</p>
+
+深绿色月度概览集中展示当月支出、日均支出和账单数量；底部快捷导航可快速切换概览、记账、账单与设置。
+
 ## 功能
 
 - 手动记账：金额、分类、日期、备注、支付方式。

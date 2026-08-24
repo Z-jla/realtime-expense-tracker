@@ -28,18 +28,31 @@ function CategoryStats({ expenses, monthKey, categories }: Props) {
         .sort((first, second) => second.total - first.total),
     }
   }, [categories, expenses, monthKey])
+  const [year, month] = monthKey.split('-')
 
   return (
     <section className="stats-section">
       <div className="section-title">
-        <h2>{monthKey} 分类</h2>
+        <div>
+          <span className="section-kicker">支出结构</span>
+          <h2>{year} 年 {Number(month)} 月分类</h2>
+        </div>
         <span>{totals.length} 类</span>
       </div>
       {totals.length > 0 ? (
         <div className="category-list">
           {totals.map((item) => (
             <div className="category-row" key={item.category}>
-              <div><span>{item.category}</span><strong>{moneyFormatter.format(item.total)}</strong></div>
+              <div>
+                <span className="category-name">
+                  <span className="category-swatch" data-category={item.category} />
+                  {item.category}
+                </span>
+                <span className="category-values">
+                  <small>{Math.round((item.total / monthTotal) * 100)}%</small>
+                  <strong>{moneyFormatter.format(item.total)}</strong>
+                </span>
+              </div>
               <div className="bar">
                 <span style={{ width: `${Math.max(8, (item.total / monthTotal) * 100)}%` }} />
               </div>

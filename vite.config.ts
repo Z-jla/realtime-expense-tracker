@@ -30,8 +30,8 @@ export default defineConfig(({ mode }) => {
           short_name: '记账',
           description: '上传消费截图或手动记录个人支出。',
           lang: 'zh-CN',
-          theme_color: '#0f766e',
-          background_color: '#eef3f8',
+          theme_color: '#173f37',
+          background_color: '#f3f5f2',
           display: 'standalone',
           start_url: '/',
           icons: [

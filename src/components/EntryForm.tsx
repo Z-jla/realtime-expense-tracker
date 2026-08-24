@@ -32,7 +32,7 @@ export default function EntryForm({
   const dateError = error?.field === 'date'
 
   return (
-    <form className="entry-form" onSubmit={onSubmit} noValidate>
+    <form className="entry-form" id="entry" onSubmit={onSubmit} noValidate>
       <div className="form-heading">
         <div>
           <span className="section-kicker">{reviewing ? '识别复核' : '快速录入'}</span>
@@ -47,15 +47,19 @@ export default function EntryForm({
 
       <label className="field amount-field" htmlFor="amount">
         金额
-        <input
-          id="amount"
-          inputMode="decimal"
-          placeholder="0.00"
-          value={draft.amount}
-          aria-invalid={amountError}
-          aria-describedby={amountError ? 'entry-form-error' : undefined}
-          onChange={(event) => onChange('amount', event.target.value)}
-        />
+        <span className="amount-input-shell">
+          <span className="amount-prefix" aria-hidden="true">¥</span>
+          <input
+            id="amount"
+            aria-label="金额"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={draft.amount}
+            aria-invalid={amountError}
+            aria-describedby={amountError ? 'entry-form-error' : undefined}
+            onChange={(event) => onChange('amount', event.target.value)}
+          />
+        </span>
       </label>
       <div className="field-row">
         <label className="field">

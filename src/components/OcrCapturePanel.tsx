@@ -1,4 +1,4 @@
-import { Camera, ReceiptText, Upload } from 'lucide-react'
+import { Camera, Images, ScanLine } from 'lucide-react'
 import type { ChangeEventHandler, RefObject } from 'react'
 import type { NativeCaptureSource } from '../ocr/capture.ts'
 import type { OcrUiState } from '../ocr/types.ts'
@@ -35,7 +35,7 @@ export default function OcrCapturePanel({
         onChange={onWebImage}
       />
       <div className="capture-copy">
-        <span className="panel-icon"><ReceiptText size={22} /></span>
+        <span className="panel-icon"><ScanLine size={22} /></span>
         <div>
           <h2>智能识图入账</h2>
           <p>{ocr.message}</p>
@@ -61,7 +61,7 @@ export default function OcrCapturePanel({
           disabled={ocr.status === 'reading'}
           onClick={() => onOpenSource('photos')}
         >
-          <Upload size={20} />从相册选择截图
+          <Images size={20} />从相册选择
         </button>
         <button
           className="secondary-action"

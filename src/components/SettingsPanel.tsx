@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Settings2, X } from 'lucide-react'
+import { ChevronDown, Plus, Settings2, X } from 'lucide-react'
 import {
   DEFAULT_CATEGORIES,
   isValidExpenseAmount,
@@ -60,10 +60,10 @@ export default function SettingsPanel({ settings, onChange }: Props) {
   }
 
   return (
-    <details className="settings-section">
+    <details className="settings-section" id="settings">
       <summary>
-        <Settings2 size={18} />
-        预算与自定义分类
+        <span><Settings2 size={18} />预算与自定义分类</span>
+        <ChevronDown className="details-chevron" size={17} />
       </summary>
       <div className="settings-content">
         <label className="field">

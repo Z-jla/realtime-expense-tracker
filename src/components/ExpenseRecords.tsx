@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Clock3, Pencil, Search, Trash2 } from 'lucide-react'
+import {
+  ArrowLeftRight,
+  Building2,
+  BusFront,
+  Clapperboard,
+  HeartPulse,
+  House,
+  Pencil,
+  Search,
+  Shapes,
+  ShoppingBag,
+  Tag,
+  Trash2,
+  Utensils,
+} from 'lucide-react'
 import { moneyFormatter, type Expense } from '../expenses.ts'
 
 type Props = {
@@ -11,6 +25,17 @@ type Props = {
 }
 
 const PAGE_SIZE = 30
+const CATEGORY_ICONS = {
+  餐饮: Utensils,
+  交通: BusFront,
+  购物: ShoppingBag,
+  转账: ArrowLeftRight,
+  生活: House,
+  娱乐: Clapperboard,
+  医疗: HeartPulse,
+  住房: Building2,
+  其他: Shapes,
+}
 
 export default function ExpenseRecords({ expenses, monthKey, categories, onEdit, onDelete }: Props) {
   const [query, setQuery] = useState('')
@@ -42,9 +67,12 @@ export default function ExpenseRecords({ expenses, monthKey, categories, onEdit,
   const visibleExpenses = filteredExpenses.slice(0, visibleCount)
 
   return (
-    <section className="records-section">
+    <section className="records-section" id="records">
       <div className="section-title">
-        <h2>账单记录</h2>
+        <div>
+          <span className="section-kicker">明细</span>
+          <h2>账单记录</h2>
+        </div>
         <span>{filteredExpenses.length} 笔</span>
       </div>
       <div className="record-filters">
@@ -70,44 +98,49 @@ export default function ExpenseRecords({ expenses, monthKey, categories, onEdit,
       {visibleExpenses.length > 0 ? (
         <>
           <ul className="expense-list">
-            {visibleExpenses.map((expense) => (
-              <li className="expense-item" key={expense.id}>
-                <div className="expense-main">
-                  <span className="category-pill" data-category={expense.category}>
-                    {expense.category}
-                  </span>
-                  <div>
-                    <strong>{expense.note || '未填写备注'}</strong>
-                    <p>
-                      <Clock3 size={14} />
-                      {expense.date} · {expense.paymentMethod}
-                      {expense.source === 'screenshot' ? ' · 截图识别' : ''}
-                    </p>
+            {visibleExpenses.map((expense) => {
+              const CategoryIcon = CATEGORY_ICONS[expense.category as keyof typeof CATEGORY_ICONS] ?? Tag
+              return (
+                <li className="expense-item" key={expense.id}>
+                  <div className="expense-main">
+                    <span className="category-symbol" data-category={expense.category} aria-hidden="true">
+                      <CategoryIcon size={18} />
+                    </span>
+                    <div className="expense-copy">
+                      <strong>{expense.note || '未填写备注'}</strong>
+                      <p>{expense.category} · {expense.date}</p>
+                      <small>
+                        {expense.paymentMethod}
+                        {expense.source === 'screenshot' ? ' · 截图识别' : ''}
+                      </small>
+                    </div>
                   </div>
-                </div>
-                <div className="expense-side">
-                  <strong>{moneyFormatter.format(expense.amount)}</strong>
-                  <div className="expense-actions">
-                    <button
-                      className="ghost-button"
-                      type="button"
-                      title="编辑记录"
-                      onClick={() => onEdit(expense)}
-                    >
-                      <Pencil size={17} />
-                    </button>
-                    <button
-                      className="ghost-button danger-button"
-                      type="button"
-                      title="删除记录"
-                      onClick={() => onDelete(expense)}
-                    >
-                      <Trash2 size={17} />
-                    </button>
+                  <div className="expense-side">
+                    <strong>−{moneyFormatter.format(expense.amount)}</strong>
+                    <div className="expense-actions">
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        title="编辑记录"
+                        aria-label={`编辑 ${expense.note || expense.category}`}
+                        onClick={() => onEdit(expense)}
+                      >
+                        <Pencil size={16} />
+                      </button>
+                      <button
+                        className="ghost-button danger-button"
+                        type="button"
+                        title="删除记录"
+                        aria-label={`删除 ${expense.note || expense.category}`}
+                        onClick={() => onDelete(expense)}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </li>
-            ))}
+                </li>
+              )
+            })}
           </ul>
           {visibleExpenses.length < filteredExpenses.length ? (
             <button
