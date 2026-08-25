@@ -34,6 +34,8 @@ const BILL_LIST_UI = /(账单|全部账单|交易记录|月账单|收支统计|�
 const PAYMENT_CARD_STATUS = /(付款成功|支付成功|交易成功|扣款成功)/
 const PAYMENT_CARD_DETAIL = /(查看详情|交易详情)/
 const PAYMENT_CARD_METHOD = /(付款方式|支付方式)/
+/** Upper bound on rows a single screenshot may turn into, for both bill-list shapes. */
+const MAX_BILL_LIST_TRANSACTIONS = 30
 const MONEY_PATTERN = /(?:[¥￥]\s*)?([+-]?\s*(?:\d{1,3}(?:,\d{3})+|\d{1,6})(?:[.,]\d{1,2})?)(?:\s*(?:元|rmb|cny))?/gi
 
 const categoryRules: Array<[string, RegExp]> = [
@@ -693,9 +695,12 @@ export function parseOcrDocument(document: OcrDocument, now = new Date()): Parse
     document.lines.reduce((sum, line) => sum + line.confidence, 0) / Math.max(document.lines.length, 1)
 
   if (paymentCardCandidates.length >= 2) {
-    const candidates = paymentCardCandidates.map((card) => card.candidate)
+    // Both bill-list paths share one ceiling. A long payment-message capture can hold dozens of
+    // cards, and every extra one costs a batch row plus a joined region text on the saved expense.
+    const cards = paymentCardCandidates.slice(0, MAX_BILL_LIST_TRANSACTIONS)
+    const candidates = cards.map((card) => card.candidate)
     const resolvedDates = resolveBillListDates(rows, candidates, now)
-    const transactions = paymentCardCandidates.map((card, index) =>
+    const transactions = cards.map((card, index) =>
       makeTransaction(
         document,
         rows,
@@ -707,19 +712,24 @@ export function parseOcrDocument(document: OcrDocument, now = new Date()): Parse
         card.merchant,
       ),
     )
-    return { transactions, isBillList: true, documentConfidence }
+    return {
+      transactions,
+      isBillList: true,
+      documentConfidence,
+      truncatedTransactionCount: paymentCardCandidates.length - cards.length,
+    }
   }
 
   if (isBillList) {
     const seenRows = new Set<number>()
-    const listCandidates = signedExpenseCandidates
+    const allListCandidates = signedExpenseCandidates
       .filter((candidate) => {
         if (seenRows.has(candidate.rowIndex)) return false
         seenRows.add(candidate.rowIndex)
         return true
       })
       .sort((first, second) => first.row.bounds.top - second.row.bounds.top)
-      .slice(0, 30)
+    const listCandidates = allListCandidates.slice(0, MAX_BILL_LIST_TRANSACTIONS)
     const resolvedDates = resolveBillListDates(rows, listCandidates, now)
     const transactions = listCandidates.map((candidate, index) =>
       makeTransaction(
@@ -732,7 +742,12 @@ export function parseOcrDocument(document: OcrDocument, now = new Date()): Parse
         resolvedDates[index],
       )
     )
-    return { transactions, isBillList: true, documentConfidence }
+    return {
+      transactions,
+      isBillList: true,
+      documentConfidence,
+      truncatedTransactionCount: allListCandidates.length - listCandidates.length,
+    }
   }
 
   const alternatives = uniqueCandidates(allCandidates)
@@ -751,6 +766,9 @@ export function formatOcrReview(document: OcrDocument, parsed: ParsedOcrResult) 
     `【耗时】${time}`,
     `【平均置信度】${Math.round(parsed.documentConfidence * 100)}%`,
   ]
+  if (parsed.truncatedTransactionCount) {
+    header.push(`【截断提示】另有 ${parsed.truncatedTransactionCount} 笔超过单图上限，请拆分截图`)
+  }
 
   const fields = parsed.transactions.slice(0, 8).map((transaction, index) => {
     const label = parsed.transactions.length > 1 ? `候选 ${index + 1}` : '解析结果'

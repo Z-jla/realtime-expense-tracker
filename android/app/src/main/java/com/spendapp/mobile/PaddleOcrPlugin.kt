@@ -2,7 +2,10 @@ package com.spendapp.mobile
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
 import android.graphics.Matrix
+import android.graphics.PointF
+import android.graphics.Rect
 import android.net.Uri
 import androidx.core.net.toUri
 import androidx.exifinterface.media.ExifInterface
@@ -15,6 +18,9 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import com.paddle.ocr.EngineConfig
 import com.paddle.ocr.PaddleOCR
 import com.paddle.ocr.PaddleOCRConfig
+import com.paddle.ocr.model.OCRBox
+import com.paddle.ocr.model.OCRResult
+import com.paddle.ocr.model.OCRRunResult
 import com.paddle.ocr.util.OpenCVUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +67,13 @@ class PaddleOcrPlugin : Plugin() {
             override val width: Int,
             override val height: Int,
         ) : AnalysisImage
+
+        class Tiled(
+            val bytes: ByteArray,
+            val regions: List<ImageTileRegion>,
+            override val width: Int,
+            override val height: Int,
+        ) : AnalysisImage
     }
 
     @PluginMethod
@@ -104,6 +117,7 @@ class PaddleOcrPlugin : Plugin() {
                     when (loaded) {
                         is AnalysisImage.Encoded -> engine.recognize(loaded.bytes)
                         is AnalysisImage.Decoded -> engine.recognize(loaded.bitmap)
+                        is AnalysisImage.Tiled -> recognizeTiled(engine, loaded)
                     }
                 }
                 val lines = JSArray()
@@ -149,10 +163,10 @@ class PaddleOcrPlugin : Plugin() {
     }
 
     /**
-     * Screenshots — the main use case — are passed through untouched so no re-encode softens the
-     * glyph edges. Everything else (EXIF-rotated camera photos, very large images) is decoded once
-     * with the correct orientation and a bounded pixel budget, which keeps the reported size in
-     * step with the pixels OpenCV sees and stops a 100 MP photo from exhausting the heap.
+     * Normal screenshots are passed through untouched so no re-encode softens glyph edges. Very
+     * long screenshots are decoded a tile at a time; this preserves their full width without ever
+     * allocating a full-height OpenCV Mat. Camera photos and EXIF-rotated images use a hard sampled
+     * pixel budget.
      */
     private fun loadAnalysisImage(imagePath: String): AnalysisImage {
         val uri = imagePath.toUri()
@@ -167,12 +181,38 @@ class PaddleOcrPlugin : Plugin() {
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) error("无法解析所选图片")
 
         val matrix = orientationMatrix(exifOrientation(bytes))
-        if (matrix == null && sampleSizeFor(bounds, MAX_ENCODED_PIXELS) == 1) {
-            return AnalysisImage.Encoded(bytes, bounds.outWidth, bounds.outHeight)
+        if (matrix == null) {
+            val encodedPixels = bounds.outWidth.toLong() * bounds.outHeight
+            if (encodedPixels <= MAX_ENCODED_PIXELS) {
+                return AnalysisImage.Encoded(bytes, bounds.outWidth, bounds.outHeight)
+            }
+            if (
+                ImageSampling.shouldTile(bounds.outWidth, bounds.outHeight, MAX_ENCODED_PIXELS) &&
+                supportsRegionDecoding(bytes)
+            ) {
+                val regions = ImageSampling.tileRegions(
+                    bounds.outWidth,
+                    bounds.outHeight,
+                    MAX_DECODED_PIXELS,
+                )
+                if (regions.size > MAX_IMAGE_TILES) {
+                    error("长图超过 ${MAX_IMAGE_TILES} 个识别分块，请拆成多张截图后重试")
+                }
+                return AnalysisImage.Tiled(
+                    bytes,
+                    regions,
+                    bounds.outWidth,
+                    bounds.outHeight,
+                )
+            }
         }
 
         val options = BitmapFactory.Options().apply {
-            inSampleSize = sampleSizeFor(bounds, MAX_DECODED_PIXELS)
+            inSampleSize = ImageSampling.sampleSizeFor(
+                bounds.outWidth,
+                bounds.outHeight,
+                MAX_DECODED_PIXELS,
+            )
         }
         val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
             ?: error("无法解码所选图片")
@@ -181,6 +221,133 @@ class PaddleOcrPlugin : Plugin() {
         val rotated = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
         if (rotated !== decoded) decoded.recycle()
         return AnalysisImage.Decoded(rotated, rotated.width, rotated.height)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun supportsRegionDecoding(bytes: ByteArray): Boolean = try {
+        val decoder = BitmapRegionDecoder.newInstance(bytes, 0, bytes.size, false)
+        decoder.recycle()
+        true
+    } catch (_: Exception) {
+        false
+    }
+
+    @Suppress("DEPRECATION")
+    private suspend fun recognizeTiled(
+        engine: PaddleOCR,
+        image: AnalysisImage.Tiled,
+    ): OCRRunResult {
+        val decoder = BitmapRegionDecoder.newInstance(image.bytes, 0, image.bytes.size, false)
+            ?: error("无法建立长图分块解码器")
+        val merged = mutableListOf<OCRResult>()
+        var detectionTimeMs = 0L
+        var recognitionTimeMs = 0L
+        var totalTimeMs = 0L
+        var detPreprocessMs = 0L
+        var detInferenceMs = 0L
+        var detPostprocessMs = 0L
+        var recPreprocessMs = 0L
+        var recInferenceMs = 0L
+        var recPostprocessMs = 0L
+        var pipelineOverheadMs = 0L
+        var coldLoadTimeMs = 0L
+        var detInputShape = emptyList<Int>()
+        val recInputShapes = mutableListOf<List<Int>>()
+        val perLineRecMs = mutableListOf<Long>()
+
+        try {
+            for (region in image.regions) {
+                val bitmap = decoder.decodeRegion(
+                    Rect(region.left, region.top, region.right, region.bottom),
+                    BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
+                ) ?: error("无法解码长图分块")
+                try {
+                    val result = engine.recognize(bitmap)
+                    result.results.forEach { mergeTileResult(merged, offsetResult(it, region)) }
+                    detectionTimeMs += result.detectionTimeMs
+                    recognitionTimeMs += result.recognitionTimeMs
+                    totalTimeMs += result.totalTimeMs
+                    detPreprocessMs += result.detPreprocessMs
+                    detInferenceMs += result.detInferenceMs
+                    detPostprocessMs += result.detPostprocessMs
+                    recPreprocessMs += result.recPreprocessMs
+                    recInferenceMs += result.recInferenceMs
+                    recPostprocessMs += result.recPostprocessMs
+                    pipelineOverheadMs += result.pipelineOverheadMs
+                    coldLoadTimeMs = maxOf(coldLoadTimeMs, result.coldLoadTimeMs)
+                    detInputShape = result.detInputShape
+                    recInputShapes += result.recInputShapes
+                    perLineRecMs += result.perLineRecMs
+                } finally {
+                    bitmap.recycle()
+                }
+            }
+        } finally {
+            decoder.recycle()
+        }
+
+        return OCRRunResult(
+            results = merged,
+            detectionTimeMs = detectionTimeMs,
+            recognitionTimeMs = recognitionTimeMs,
+            totalTimeMs = totalTimeMs,
+            lineCount = merged.size,
+            detPreprocessMs = detPreprocessMs,
+            detInferenceMs = detInferenceMs,
+            detPostprocessMs = detPostprocessMs,
+            recPreprocessMs = recPreprocessMs,
+            recInferenceMs = recInferenceMs,
+            recPostprocessMs = recPostprocessMs,
+            pipelineOverheadMs = pipelineOverheadMs,
+            coldLoadTimeMs = coldLoadTimeMs,
+            detInputShape = detInputShape,
+            recInputShapes = recInputShapes,
+            perLineRecMs = perLineRecMs,
+        )
+    }
+
+    private fun offsetResult(result: OCRResult, region: ImageTileRegion): OCRResult = result.copy(
+        box = offsetBox(result.box, region),
+        wordBoxes = result.wordBoxes?.map { offsetBox(it, region) },
+    )
+
+    private fun offsetBox(box: OCRBox, region: ImageTileRegion): OCRBox = OCRBox(
+        box.points.map { point ->
+            PointF(point.x + region.left, point.y + region.top)
+        },
+    )
+
+    private fun mergeTileResult(results: MutableList<OCRResult>, candidate: OCRResult) {
+        val duplicateIndex = results.indexOfFirst { existing ->
+            existing.text == candidate.text && boxOverlap(existing.box, candidate.box) >= 0.55f
+        }
+        if (duplicateIndex < 0) {
+            results += candidate
+        } else if (candidate.confidence > results[duplicateIndex].confidence) {
+            results[duplicateIndex] = candidate
+        }
+    }
+
+    private fun boxOverlap(first: OCRBox, second: OCRBox): Float {
+        val firstLeft = first.points.minOf { it.x }
+        val firstTop = first.points.minOf { it.y }
+        val firstRight = first.points.maxOf { it.x }
+        val firstBottom = first.points.maxOf { it.y }
+        val secondLeft = second.points.minOf { it.x }
+        val secondTop = second.points.minOf { it.y }
+        val secondRight = second.points.maxOf { it.x }
+        val secondBottom = second.points.maxOf { it.y }
+        val intersectionWidth = (minOf(firstRight, secondRight) - maxOf(firstLeft, secondLeft))
+            .coerceAtLeast(0f)
+        val intersectionHeight = (minOf(firstBottom, secondBottom) - maxOf(firstTop, secondTop))
+            .coerceAtLeast(0f)
+        val intersection = intersectionWidth * intersectionHeight
+        val firstArea = (firstRight - firstLeft).coerceAtLeast(0f) *
+            (firstBottom - firstTop).coerceAtLeast(0f)
+        val secondArea = (secondRight - secondLeft).coerceAtLeast(0f) *
+            (secondBottom - secondTop).coerceAtLeast(0f)
+        val minimumArea = minOf(firstArea, secondArea)
+        return if (minimumArea <= 0f) 0f else intersection / minimumArea
     }
 
     /** Returns a negative value when the provider does not report a size. */
@@ -282,16 +449,6 @@ class PaddleOcrPlugin : Plugin() {
         return matrix
     }
 
-    private fun sampleSizeFor(bounds: BitmapFactory.Options, maxPixels: Long): Int {
-        var sample = 1
-        while (
-            (bounds.outWidth.toLong() / sample) * (bounds.outHeight.toLong() / sample) > maxPixels
-        ) {
-            sample *= 2
-        }
-        return sample
-    }
-
     private suspend fun getOrCreateEngine(): PaddleOCR {
         check(!destroyed) { "OCR 插件已停止" }
         ocr?.let { return it }
@@ -343,5 +500,8 @@ class PaddleOcrPlugin : Plugin() {
 
         /** The decode path allocates two bitmaps when rotating, so it gets a tighter budget. */
         const val MAX_DECODED_PIXELS = 8_000_000L
+
+        /** Bounds worst-case OCR time for a maliciously compressed or impractically long image. */
+        const val MAX_IMAGE_TILES = 24
     }
 }

@@ -592,6 +592,16 @@
   font-size: 10px;
 }
 
+.ocr-batch-copy .ocr-batch-warning {
+  color: var(--danger);
+  font-weight: 750;
+}
+
+.ocr-batch-list label.is-blocked {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
 .ocr-batch-amount {
   color: var(--accent);
   font-size: 14px;

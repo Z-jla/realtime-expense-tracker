@@ -21,6 +21,7 @@ import './App.css'
 import {
   createAutomaticBackupController,
   readAutomaticBackup,
+  type AutomaticBackupStatus,
 } from './autoBackup.ts'
 import BackupPanel from './components/BackupPanel.tsx'
 import CategoryStats from './components/CategoryStats.tsx'
@@ -46,15 +47,18 @@ import {
   type Expense,
 } from './expenses.ts'
 import {
-  captureNativeImage,
+  captureNativeImages,
   isNativeCaptureCancellation,
   isNativeCapturePermissionDenied,
+  MAX_GALLERY_SELECTION,
   type NativeCaptureSource,
 } from './ocr/capture.ts'
 import {
   decideOcrDocument,
   ocrReviewMessage,
+  prepareOcrDocumentBatch,
   reconcileOcrBatchExpenses,
+  type OcrDocumentTransactionGroup,
 } from './ocr/decision.ts'
 import { formatOcrReview, parseOcrDocument } from './ocr/parser.ts'
 import { recognizeExpenseImage, recognizeNativeExpenseImage } from './ocr/recognize.ts'
@@ -67,6 +71,8 @@ import {
   saveSettings,
 } from './storage.ts'
 import { useToday } from './useToday.ts'
+
+const SECTION_IDS = ['overview', 'entry', 'records', 'settings'] as const
 
 function formatHeaderDate(value: string) {
   const [year, month, day] = value.split('-').map(Number)
@@ -99,6 +105,8 @@ function App() {
     message: string
   } | null>(null)
   const [storageError, setStorageError] = useState<string | null>(null)
+  const [automaticBackupStatus, setAutomaticBackupStatus] =
+    useState<AutomaticBackupStatus | null>(null)
   const [activeSection, setActiveSection] = useState('overview')
   const [ocr, setOcr] = useState<OcrUiState>({
     status: 'idle',
@@ -107,7 +115,7 @@ function App() {
     rawText: '',
   })
   const [ocrBatch, setOcrBatch] = useState<BatchCandidate[]>([])
-  const [recentlyDeleted, setRecentlyDeleted] = useState<Expense | null>(null)
+  const [recentlyDeleted, setRecentlyDeleted] = useState<Expense[]>([])
   const galleryInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const expensesRef = useRef(expenses)
@@ -119,7 +127,10 @@ function App() {
   const previousTodayRef = useRef(today)
   expensesRef.current = expenses
   const [automaticBackup] = useState(() =>
-    createAutomaticBackupController(() => backupStateRef.current),
+    createAutomaticBackupController(
+      () => backupStateRef.current,
+      setAutomaticBackupStatus,
+    ),
   )
 
   useEffect(() => {
@@ -140,6 +151,31 @@ function App() {
     },
     [],
   )
+
+  // The bottom bar used to highlight only whatever was last tapped, so it disagreed with the page
+  // as soon as the user scrolled by hand. Tracking the topmost visible section keeps the two in
+  // step in both directions.
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') return
+    const elements = SECTION_IDS.map((id) => document.getElementById(id)).filter(
+      (element): element is HTMLElement => element !== null,
+    )
+    if (elements.length === 0) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((first, second) => first.boundingClientRect.top - second.boundingClientRect.top)[0]
+        if (visible?.target.id) setActiveSection(visible.target.id)
+      },
+      // A band near the top of the viewport, so a section counts as current once it reaches
+      // reading position rather than the moment its last pixel leaves the screen.
+      { rootMargin: '-72px 0px -60% 0px', threshold: 0 },
+    )
+    elements.forEach((element) => observer.observe(element))
+    return () => observer.disconnect()
+  }, [])
 
   const categories = useMemo(
     () => availableCategories(settings.customCategories, expenses),
@@ -225,9 +261,23 @@ function App() {
 
   useEffect(() => {
     if (!backupReady) return
-    void automaticBackup.start().catch(() => undefined)
-    return () => automaticBackup.stop()
-  }, [automaticBackup, backupReady])
+    let cancelled = false
+    void automaticBackup
+      .start()
+      .then(() => {
+        // Existing installs already have authoritative local data, so verify the new shared mirror
+        // immediately. A fresh/reinstalled app must not overwrite an older shared backup with an
+        // empty snapshot before the user has had a chance to import it.
+        if (!cancelled && !shouldRestoreSnapshot) return automaticBackup.flush()
+      })
+      .catch(() => {
+        if (!cancelled) setAutomaticBackupStatus({ state: 'failed' })
+      })
+    return () => {
+      cancelled = true
+      automaticBackup.stop()
+    }
+  }, [automaticBackup, backupReady, shouldRestoreSnapshot])
 
   // 首启动后把默认设置落盘，getStoredAppDataPresence 才能把"用过这个应用"和"本地数据被清空"
   // 区分开。必须等恢复流程结束，否则会抢在快照之前把 settings 写成默认值。
@@ -325,21 +375,27 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  // Deletions stack instead of replacing each other: a single slot meant that clearing two rows in
+  // a row silently made the first one unrecoverable. The window restarts on every delete and drops
+  // the whole stack at once, so the toast never outlives what it offers to restore.
   const deleteExpense = (expense: Expense) => {
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current)
     persistExpenses(expensesRef.current.filter((item) => item.id !== expense.id))
-    setRecentlyDeleted(expense)
-    undoTimerRef.current = setTimeout(() => setRecentlyDeleted(null), 5_000)
+    setRecentlyDeleted((current) => [expense, ...current])
+    undoTimerRef.current = setTimeout(() => setRecentlyDeleted([]), 5_000)
     if (editingId === expense.id) resetDraft()
   }
 
   const undoDelete = () => {
-    if (!recentlyDeleted) return
-    if (undoTimerRef.current) clearTimeout(undoTimerRef.current)
-    if (!expensesRef.current.some((item) => item.id === recentlyDeleted.id)) {
-      persistExpenses([recentlyDeleted, ...expensesRef.current])
-    }
-    setRecentlyDeleted(null)
+    setRecentlyDeleted((current) => {
+      const [restored, ...remaining] = current
+      if (!restored) return current
+      if (!expensesRef.current.some((item) => item.id === restored.id)) {
+        persistExpenses([restored, ...expensesRef.current])
+      }
+      if (remaining.length === 0 && undoTimerRef.current) clearTimeout(undoTimerRef.current)
+      return remaining
+    })
   }
 
   const applyOcrDocument = (document: OcrDocument, requestId: number) => {
@@ -352,11 +408,18 @@ function App() {
     setFormError(null)
 
     if (decision.kind === 'batch') {
-      setOcrBatch(decision.transactions.map((transaction) => ({ ...transaction, selected: true })))
+      setOcrBatch(
+        prepareOcrDocumentBatch([
+          { documentIndex: 0, documentText: document.text, transactions: decision.transactions },
+        ]),
+      )
       setDraft(defaultDraft(today))
+      const truncatedMessage = parsed.truncatedTransactionCount
+        ? `，另有 ${parsed.truncatedTransactionCount} 笔超过单图上限，请拆分截图继续识别`
+        : ''
       setOcr({
         status: 'needs-review',
-        message: `识别到 ${decision.transactions.length} 笔支出，请勾选后批量入账。`,
+        message: `识别到 ${decision.transactions.length} 笔候选，请勾选后批量入账${truncatedMessage}。`,
         progress: 1,
         rawText: reviewText,
         engine: document.engine,
@@ -406,6 +469,73 @@ function App() {
     })
   }
 
+  /**
+   * Several screenshots always land in the batch panel rather than auto-saving. Auto-entry is only
+   * trustworthy when the user is looking at the one image it came from; across a picked set it
+   * would commit rows nobody reviewed.
+   *
+   * Takes recognizers rather than paths so the native picker (URIs) and the web file input (File
+   * objects) share one merge-and-review path.
+   */
+  const applyOcrDocuments = async (
+    recognizers: Array<
+      (onProgress: (progress: number, message: string) => void) => Promise<OcrDocument>
+    >,
+    requestId: number,
+  ) => {
+    const groups: OcrDocumentTransactionGroup[] = []
+    let lastEngine: string | undefined
+    let truncatedCount = 0
+    const reviews: string[] = []
+
+    for (const [index, recognize] of recognizers.entries()) {
+      const document = await recognize((progress, message) =>
+        updateOcrProgress(
+          requestId,
+          (index + progress) / recognizers.length,
+          `第 ${index + 1}/${recognizers.length} 张：${message}`,
+        ),
+      )
+      if (requestId !== ocrRequestIdRef.current) return
+      const parsed = parseOcrDocument(document)
+      lastEngine = document.engine
+      truncatedCount += parsed.truncatedTransactionCount ?? 0
+      reviews.push(`—— 第 ${index + 1} 张 ——`, formatOcrReview(document, parsed))
+      groups.push({
+        documentIndex: index,
+        documentText: document.text,
+        transactions: parsed.transactions,
+      })
+    }
+
+    const collected = prepareOcrDocumentBatch(groups)
+    const importableCount = collected.filter((candidate) => candidate.direction === 'expense').length
+    const blockedCount = collected.length - importableCount
+    const overlapCount = collected.filter((candidate) => candidate.overlapDuplicate).length
+    const notices = [
+      blockedCount > 0 ? `${blockedCount} 笔非支出不会入账` : '',
+      overlapCount > 0 ? `${overlapCount} 笔跨截图重复项已取消勾选` : '',
+      truncatedCount > 0 ? `${truncatedCount} 笔超过单图上限，请拆分截图` : '',
+    ].filter(Boolean)
+    setEditingId(null)
+    setFormError(null)
+    setDraft(defaultDraft(today))
+    pendingOcrTextRef.current = null
+    setOcrBatch(collected)
+    setOcr({
+      status: 'needs-review',
+      message:
+        collected.length > 0
+          ? `${recognizers.length} 张截图共识别到 ${collected.length} 笔候选，请勾选后批量入账${
+              notices.length > 0 ? `；${notices.join('，')}` : ''
+            }。`
+          : `${recognizers.length} 张截图都没有识别到可用金额，请换更清晰、边缘完整的截图。`,
+      progress: 1,
+      rawText: reviews.join('\n'),
+      engine: lastEngine,
+    })
+  }
+
   const updateOcrProgress = (requestId: number, progress: number, message: string) => {
     if (requestId !== ocrRequestIdRef.current) return
     setOcr((current) => ({
@@ -439,11 +569,21 @@ function App() {
     const requestId = prepareOcr()
     if (requestId === null) return
     try {
-      const imagePath = await captureNativeImage(source)
-      const document = await recognizeNativeExpenseImage(imagePath, (progress, message) =>
-        updateOcrProgress(requestId, progress, message),
-      )
-      applyOcrDocument(document, requestId)
+      const imagePaths = await captureNativeImages(source)
+      if (imagePaths.length === 1) {
+        const document = await recognizeNativeExpenseImage(imagePaths[0], (progress, message) =>
+          updateOcrProgress(requestId, progress, message),
+        )
+        applyOcrDocument(document, requestId)
+      } else {
+        await applyOcrDocuments(
+          imagePaths.map(
+            (imagePath) => (onProgress: (progress: number, message: string) => void) =>
+              recognizeNativeExpenseImage(imagePath, onProgress),
+          ),
+          requestId,
+        )
+      }
     } catch (error) {
       if (requestId !== ocrRequestIdRef.current) return
       if (isNativeCaptureCancellation(error)) {
@@ -482,18 +622,38 @@ function App() {
   }
 
   const handleWebImage = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
+    const files = Array.from(event.target.files ?? [])
+    if (files.length === 0) return
+    if (files.length > MAX_GALLERY_SELECTION) {
+      setOcr({
+        status: 'error',
+        message: `一次最多选择 ${MAX_GALLERY_SELECTION} 张图片，请分批识别。`,
+        progress: 0,
+        rawText: '',
+      })
+      event.target.value = ''
+      return
+    }
     const requestId = prepareOcr()
     if (requestId === null) {
       event.target.value = ''
       return
     }
     try {
-      const document = await recognizeExpenseImage(file, (progress, message) =>
-        updateOcrProgress(requestId, progress, message),
-      )
-      applyOcrDocument(document, requestId)
+      if (files.length === 1) {
+        const document = await recognizeExpenseImage(files[0], (progress, message) =>
+          updateOcrProgress(requestId, progress, message),
+        )
+        applyOcrDocument(document, requestId)
+      } else {
+        await applyOcrDocuments(
+          files.map(
+            (file) => (onProgress: (progress: number, message: string) => void) =>
+              recognizeExpenseImage(file, onProgress),
+          ),
+          requestId,
+        )
+      }
     } catch (error) {
       if (requestId !== ocrRequestIdRef.current) return
       setOcr({
@@ -511,7 +671,9 @@ function App() {
   const toggleBatchCandidate = (index: number) => {
     setOcrBatch((current) =>
       current.map((candidate, candidateIndex) =>
-        candidateIndex === index ? { ...candidate, selected: !candidate.selected } : candidate,
+        candidateIndex === index && candidate.direction === 'expense'
+          ? { ...candidate, selected: !candidate.selected }
+          : candidate,
       ),
     )
   }
@@ -519,7 +681,7 @@ function App() {
   const confirmBatchCandidates = () => {
     const selected = ocrBatch.filter(
       (candidate): candidate is BatchCandidate & { amount: number } =>
-        candidate.selected && candidate.amount !== null,
+        candidate.selected && candidate.amount !== null && candidate.direction === 'expense',
     )
     const { added, updatedExpenses, updated } = reconcileOcrBatchExpenses(
       selected,
@@ -580,6 +742,16 @@ function App() {
       </header>
 
       {storageError ? <div className="storage-alert" role="alert">{storageError}</div> : null}
+      {automaticBackupStatus?.state === 'failed' ? (
+        <div className="storage-alert" role="alert">
+          自动备份失败。请立即手动导出 JSON，确认成功前不要卸载应用。
+        </div>
+      ) : automaticBackupStatus?.state === 'saved' &&
+        !automaticBackupStatus.documentsMirrored ? (
+        <div className="storage-alert" role="alert">
+          应用私有备份已更新，但 Documents 共享镜像写入或校验失败。卸载前请手动导出 JSON。
+        </div>
+      ) : null}
 
       <MonthOverview
         expenses={expenses}
@@ -631,6 +803,7 @@ function App() {
         expenses={expenses}
         settings={settings}
         today={today}
+        automaticBackupStatus={automaticBackupStatus}
         onExpensesChange={persistExpenses}
         onSettingsChange={persistSettings}
       />
@@ -684,9 +857,12 @@ function App() {
         </button>
       </nav>
 
-      {recentlyDeleted ? (
+      {recentlyDeleted.length > 0 ? (
         <div className="undo-toast" role="status" aria-live="polite">
-          <span>已删除“{recentlyDeleted.note || recentlyDeleted.category}”</span>
+          <span>
+            已删除“{recentlyDeleted[0].note || recentlyDeleted[0].category}”
+            {recentlyDeleted.length > 1 ? ` 等 ${recentlyDeleted.length} 笔` : ''}
+          </span>
           <button type="button" onClick={undoDelete}><RotateCcw size={16} />撤销</button>
         </div>
       ) : null}

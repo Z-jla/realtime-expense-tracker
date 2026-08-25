@@ -71,6 +71,13 @@ jobs:
         working-directory: android
         run: ./gradlew compileDebugAndroidTestSources lintDebug --no-daemon --console=plain
 
+      # compileDebugAndroidTestSources only proves the test sources build. The JVM unit tests are
+      # the ones that actually execute, and they cover the decode sampling that decides whether a
+      # tall bill screenshot reaches the engine legibly.
+      - name: Run Android unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest --no-daemon --console=plain
+
       - name: Verify release signing guard
         working-directory: android
         run: |

@@ -436,3 +436,32 @@ test('识别复核文本按画面坐标从上到下、从左到右排列', () =>
 
   assert.ok(review.indexOf('左侧 右侧') < review.indexOf('底部'))
 })
+
+test('超长付款卡片列表按上限截断，保留最靠前的三十笔', () => {
+  const CARD_HEIGHT = 530
+  const CARD_COUNT = 40
+  const lines = [line('服务消息', 301, 157, 191, 52, 1)]
+  for (let index = 0; index < CARD_COUNT; index += 1) {
+    const top = 320 + index * CARD_HEIGHT
+    lines.push(
+      line(`商户${index + 1}`, 166, top, 200, 53, 1),
+      line('8月21日下午12:20', 170, top + 58, 252, 36, 0.999),
+      line('付款成功', 456, top + 140, 164, 49, 1),
+      // Amounts stay distinct so truncation cannot be confused with deduplication.
+      line(`¥${(index + 1).toFixed(2)}`, 408, top + 195, 263, 81, 0.93),
+      line('查看详情>', 468, top + 286, 164, 39, 0.99),
+      line('付款方式 农业银行储蓄卡(3279)', 68, top + 372, 546, 41, 0.945),
+    )
+  }
+  const parsed = parseOcrDocument(
+    document(lines, 'PP-OCRv6-tiny', 320 + CARD_COUNT * CARD_HEIGHT + 200),
+    new Date(2026, 7, 24, 16, 8, 0),
+  )
+
+  assert.equal(parsed.isBillList, true)
+  assert.equal(parsed.transactions.length, 30)
+  assert.equal(parsed.transactions[0].amount, 1)
+  assert.equal(parsed.transactions[29].amount, 30)
+  assert.equal(parsed.truncatedTransactionCount, 10)
+  assert.match(formatOcrReview(document(lines, 'PP-OCRv6-tiny', 320 + CARD_COUNT * CARD_HEIGHT + 200), parsed), /另有 10 笔超过单图上限/)
+})

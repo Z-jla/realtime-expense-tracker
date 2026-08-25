@@ -3,6 +3,7 @@ import type { Expense } from '../src/expenses.ts'
 import {
   decideOcrDocument,
   ocrReviewMessage,
+  prepareOcrDocumentBatch,
   reconcileOcrBatchExpenses,
 } from '../src/ocr/decision.ts'
 import type {
@@ -91,6 +92,65 @@ describe('OCR 入账决策', () => {
     const decision = decideOcrDocument(document(), parsed(transactions, true), [])
     expect(decision).toMatchObject({ kind: 'batch' })
     if (decision.kind === 'batch') expect(decision.transactions).toHaveLength(2)
+  })
+
+  it('多图批量不会默认选择退款、收入、未知方向或带警告项目', () => {
+    const candidates = prepareOcrDocumentBatch([
+      {
+        documentIndex: 0,
+        documentText: '第一张',
+        transactions: [
+          transaction(),
+          transaction({ direction: 'refund', note: '退款' }),
+          transaction({ direction: 'income', note: '收入' }),
+          transaction({ direction: 'unknown', note: '方向不明' }),
+          transaction({ warnings: ['金额置信度偏低'], note: '需确认' }),
+        ],
+      },
+    ])
+
+    expect(candidates.map((candidate) => candidate.selected)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+    ])
+    const selected = candidates.filter(
+      (candidate) => candidate.selected && candidate.direction === 'expense',
+    )
+    expect(reconcileOcrBatchExpenses(selected, []).added).toHaveLength(1)
+    expect(
+      reconcileOcrBatchExpenses(
+        [transaction({ direction: 'refund', note: '退款' })],
+        [],
+      ).added,
+    ).toHaveLength(0)
+  })
+
+  it('跨截图重叠行默认取消选择，同时保留同一截图内的真实重复扣款', () => {
+    const duplicated = transaction({ amount: 1, note: '快宝', sourceRow: '快宝 -1.00' })
+    const candidates = prepareOcrDocumentBatch([
+      {
+        documentIndex: 0,
+        documentText: '第一张',
+        transactions: [duplicated, duplicated],
+      },
+      {
+        documentIndex: 1,
+        documentText: '第二张',
+        transactions: [duplicated, duplicated, duplicated],
+      },
+    ])
+
+    expect(candidates.map(({ selected, overlapDuplicate }) => ({ selected, overlapDuplicate }))).toEqual([
+      { selected: true, overlapDuplicate: false },
+      { selected: true, overlapDuplicate: false },
+      { selected: false, overlapDuplicate: true },
+      { selected: false, overlapDuplicate: true },
+      { selected: true, overlapDuplicate: false },
+    ])
+    expect(reconcileOcrBatchExpenses(candidates.filter((item) => item.selected), []).added).toHaveLength(3)
   })
 
   it('保留同一截图中的相同交易行，但阻止再次导入已有账单', () => {

@@ -9,7 +9,7 @@
   <img src="docs/screenshots/app-dark.png" alt="实时记账深色模式界面" width="320" />
 </p>
 
-深绿色月度概览集中展示当月支出、日均支出和账单数量；底部快捷导航可快速切换概览、记账、账单与设置。
+以上为 v1.1.7 最新界面的浅色与深色模式。深绿色月度概览集中展示当月支出、日均支出和账单数量；底部快捷导航可快速切换概览、记账、账单与设置。
 
 ## 功能
 
@@ -126,10 +126,10 @@ Android 构建仅包含 `arm64-v8a` 和 `armeabi-v7a`，不会打入模拟器用
 
 ### 正式签名与版本
 
-默认开发版本为 `versionCode 8` / `versionName 1.1.6`。CI 或发布机可通过环境变量覆盖：
+默认开发版本为 `versionCode 9` / `versionName 1.1.7`。CI 或发布机可通过环境变量覆盖：
 
 ```powershell
-$env:SPEND_APP_VERSION_CODE = '8'
+$env:SPEND_APP_VERSION_CODE = '9'
 $env:SPEND_APP_VERSION_NAME = '1.2.0'
 $env:SPEND_RELEASE_STORE_FILE = 'C:\secure\spend-release.jks'
 $env:SPEND_RELEASE_STORE_PASSWORD = '...'
@@ -140,6 +140,21 @@ cd android
 ```
 
 Release 构建已开启 R8 与资源收缩；缺少完整签名变量时会主动失败，避免误发未签名包。密钥和密码不要写入仓库。
+
+#### 建立长期签名密钥（只需做一次）
+
+`v1.1.6` 及更早的 APK 都是用本机 Android **调试证书**签的。调试证书随机器生成，一旦变化，用户就无法覆盖安装，只能卸载重装——而卸载会清空应用私有目录里的自动备份。用一份长期保管的密钥库可以彻底消除这个问题：
+
+```powershell
+$env:JAVA_HOME = 'D:\Anaconda\envs\spend-app\Library\lib\jvm'
+pwsh -File scripts/create-release-keystore.ps1 -OutFile "$HOME\keys\spend-app-release.jks"
+```
+
+脚本会打印 SHA-256 指纹和需要配置的四个 GitHub Secret：`SPEND_RELEASE_KEYSTORE_BASE64`、`SPEND_RELEASE_STORE_PASSWORD`、`SPEND_RELEASE_KEY_ALIAS`、`SPEND_RELEASE_KEY_PASSWORD`。**密钥库文件和密码必须离线备份**：丢失后任何新构建都无法更新已安装的应用，只能改包名重新发布。
+
+配好后推送 `v*` 标签即触发 `.github/workflows/release.yml`：它会跑前端与 Android 测试、Android lint、构建签名 release APK、拒绝任何仍带 `CN=Android Debug` 的产物，并校验 16 KB 对齐、ABI、OCR 模型和关键原生类，然后把 APK 和 `.sha256` 挂到 GitHub Release。
+
+> 从调试签名切到正式签名的**那一次**升级仍需卸载重装。建议顺序：先装带共享目录备份的 `v1.1.7`（调试签名，可覆盖安装），打开“备份与恢复”并确认界面显示 `自动备份.json 已写入并校验可读`；若没有显示，必须手动导出 JSON。确认备份后再卸载并安装正式签名版，最后用「导入 JSON」恢复。
 
 ## OCR 调试
 
@@ -160,9 +175,10 @@ conda run -n spend-app node scripts/probe-ocr.mjs "C:\path\to\screenshot.jpg" ch
 ## 数据说明
 
 - 所有账单数据保存在本机 `localStorage`；Android 的应用私有目录还保留最新和上一份 JSON 快照，并与 WebView 数据一起纳入系统云备份/换机迁移。若启动时发现账单或设置任一部分缺失/损坏，应用会只恢复缺失部分（最新快照读不出时自动回退到上一份）。
+- 应用私有目录会随卸载一起清空，系统云备份也依赖设备是否启用 Google 备份。因此应用会尝试把最新快照镜像到共享目录 `Documents/实时记账/自动备份.json`，写完后立即回读校验并在界面显示结果。只有显示“已写入并校验可读”后才能依赖该文件迁移；作用域存储可能不允许重装后的应用直接读回，此时用「导入 JSON」手动选中该文件即可恢复。
 - 截图识别的原始文本只保留 200 字摘要用于排查。完整保存会随账单条数线性膨胀，很快就会超出 WebView 约 5–10 MB 的 `localStorage` 配额。
 - 当前版本没有账号系统、云同步和服务器。
-- 卸载应用、清除应用数据或清理浏览器站点数据会删除本地账单。
+- 卸载应用、清除应用数据或清理浏览器站点数据会删除本地账单（共享目录里的镜像备份除外）。
 
 ## 开源前注意
 

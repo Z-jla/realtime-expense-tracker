@@ -20,7 +20,7 @@ vi.mock('@capacitor/app', () => ({
 }))
 
 vi.mock('@capacitor/filesystem', () => ({
-  Directory: { Data: 'DATA' },
+  Directory: { Data: 'DATA', Documents: 'DOCUMENTS' },
   Encoding: { UTF8: 'utf8' },
   Filesystem: { writeFile: mocks.writeFile, readFile: mocks.readFile, rename: mocks.rename },
 }))
@@ -53,12 +53,30 @@ function backupDocument(expenses: Expense[]) {
   })
 }
 
+/** Each snapshot also writes a shared-storage mirror, so counting raw calls would be ambiguous. */
+function sandboxWrites() {
+  return mocks.writeFile.mock.calls.filter((call) => call[0].directory === 'DATA')
+}
+
+function documentsWrites() {
+  return mocks.writeFile.mock.calls.filter((call) => call[0].directory === 'DOCUMENTS')
+}
+
 beforeEach(() => {
   mocks.native = true
   mocks.pause = null
   vi.clearAllMocks()
   mocks.removeListener.mockResolvedValue(undefined)
   mocks.writeFile.mockResolvedValue({ uri: 'file://backups/latest.json.tmp' })
+  mocks.readFile.mockImplementation((options: { directory: string }) => {
+    if (options.directory === 'DOCUMENTS') {
+      const latestMirror = documentsWrites().at(-1)?.[0]
+      return Promise.resolve({ data: latestMirror?.data ?? '' })
+    }
+    return Promise.reject(
+      Object.assign(new Error('File does not exist'), { code: 'OS-PLUG-FILE-0008' }),
+    )
+  })
   mocks.rename.mockResolvedValue(undefined)
   mocks.addListener.mockImplementation((_event, callback: () => void) => {
     mocks.pause = callback
@@ -77,12 +95,12 @@ describe('Android 自动快照', () => {
     expect(mocks.writeFile).not.toHaveBeenCalled()
 
     controller.recordChange()
-    await vi.waitFor(() => expect(mocks.writeFile).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(sandboxWrites()).toHaveLength(1))
 
     snapshot = { expenses: [], settings }
     mocks.pause?.()
-    await vi.waitFor(() => expect(mocks.writeFile).toHaveBeenCalledTimes(2))
-    const latestPayload = JSON.parse(mocks.writeFile.mock.calls[1][0].data)
+    await vi.waitFor(() => expect(sandboxWrites()).toHaveLength(2))
+    const latestPayload = JSON.parse(sandboxWrites()[1][0].data)
     expect(latestPayload.expenses).toEqual([])
 
     controller.stop()
@@ -105,7 +123,10 @@ describe('Android 自动快照', () => {
     mocks.rename.mockRejectedValueOnce(
       Object.assign(new Error('File does not exist'), { code: 'OS-PLUG-FILE-0008' }),
     )
-    await expect(writeAutomaticBackup([firstExpense], settings)).resolves.toBe(true)
+    await expect(writeAutomaticBackup([firstExpense], settings)).resolves.toMatchObject({
+      sandboxWritten: true,
+      documentsMirrored: true,
+    })
     expect(mocks.rename).toHaveBeenCalledTimes(2)
   })
 
@@ -135,6 +156,63 @@ describe('Android 自动快照', () => {
     expect(mocks.readFile.mock.calls.map((call) => call[0].path)).toEqual([
       'backups/latest.json',
       'backups/previous.json',
+    ])
+  })
+
+  it('同时把快照写到共享文档目录，卸载重装后仍留有副本', async () => {
+    await writeAutomaticBackup([firstExpense], settings)
+
+    expect(documentsWrites()).toHaveLength(1)
+    const mirror = documentsWrites()[0][0]
+    expect(mirror.path).toBe('实时记账/自动备份.json')
+    expect(JSON.parse(mirror.data).expenses).toEqual([firstExpense])
+    // The mirror must never be renamed into place; only the sandbox copy is rotated.
+    expect(mocks.rename.mock.calls.every((call) => call[0].directory === 'DATA')).toBe(true)
+  })
+
+  it('共享目录没有权限时仍算备份成功，不影响沙盒内的主快照', async () => {
+    mocks.writeFile.mockImplementation((options: { directory: string }) =>
+      options.directory === 'DOCUMENTS'
+        ? Promise.reject(new Error('Permission denied'))
+        : Promise.resolve({ uri: 'file://backups/latest.json.tmp' }),
+    )
+
+    await expect(writeAutomaticBackup([firstExpense], settings)).resolves.toMatchObject({
+      sandboxWritten: true,
+      documentsMirrored: false,
+    })
+    expect(sandboxWrites()).toHaveLength(1)
+  })
+
+  it('控制器把共享镜像失败报告给界面', async () => {
+    const statuses: unknown[] = []
+    mocks.writeFile.mockImplementation((options: { directory: string }) =>
+      options.directory === 'DOCUMENTS'
+        ? Promise.reject(new Error('Permission denied'))
+        : Promise.resolve({ uri: 'file://backups/latest.json.tmp' }),
+    )
+    const controller = createAutomaticBackupController(
+      () => ({ expenses: [firstExpense], settings }),
+      (status) => statuses.push(status),
+    )
+
+    await controller.flush()
+    expect(statuses).toEqual([{ state: 'saved', documentsMirrored: false }])
+  })
+
+  it('沙盒快照全部丢失后从共享目录的副本恢复', async () => {
+    mocks.readFile.mockImplementation((options: { directory: string }) =>
+      options.directory === 'DOCUMENTS'
+        ? Promise.resolve({ data: backupDocument([firstExpense]) })
+        : Promise.reject(new Error('File does not exist')),
+    )
+
+    const restored = await readAutomaticBackup()
+    expect(restored?.expenses).toEqual([firstExpense])
+    expect(mocks.readFile.mock.calls.map((call) => [call[0].directory, call[0].path])).toEqual([
+      ['DATA', 'backups/latest.json'],
+      ['DATA', 'backups/previous.json'],
+      ['DOCUMENTS', '实时记账/自动备份.json'],
     ])
   })
 })

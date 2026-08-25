@@ -1,5 +1,6 @@
 import { useRef, useState, type ChangeEvent } from 'react'
 import { Download, Upload } from 'lucide-react'
+import type { AutomaticBackupStatus } from '../autoBackup.ts'
 import { exportBackup, parseBackupText } from '../backup.ts'
 import {
   mergeImportedExpenses,
@@ -11,6 +12,7 @@ type Props = {
   expenses: Expense[]
   settings: AppSettings
   today: string
+  automaticBackupStatus: AutomaticBackupStatus | null
   onExpensesChange: (expenses: Expense[]) => void
   onSettingsChange: (settings: AppSettings) => void
 }
@@ -21,6 +23,7 @@ export default function BackupPanel({
   expenses,
   settings,
   today,
+  automaticBackupStatus,
   onExpensesChange,
   onSettingsChange,
 }: Props) {
@@ -127,8 +130,23 @@ export default function BackupPanel({
           {message.text}
         </p>
       ) : null}
+      {automaticBackupStatus?.state === 'saved' && automaticBackupStatus.documentsMirrored ? (
+        <p className="backup-message is-ok" role="status">
+          Documents/实时记账/自动备份.json 已写入并校验可读。
+        </p>
+      ) : automaticBackupStatus?.state === 'saved' ? (
+        <p className="backup-message is-error" role="alert">
+          共享自动备份写入或校验失败；卸载前必须手动导出 JSON。
+        </p>
+      ) : automaticBackupStatus?.state === 'failed' ? (
+        <p className="backup-message is-error" role="alert">
+          应用私有自动备份失败；请立即手动导出 JSON。
+        </p>
+      ) : null}
       <p className="backup-hint">
-        Android 会先写入 Documents/实时记账，再打开系统分享面板；网页端请在下载列表确认。卸载前请确认备份文件已保存。
+        Android 会先写入 Documents/实时记账，再打开系统分享面板；网页端请在下载列表确认。应用会尝试把最新快照
+        镜像到 Documents/实时记账/自动备份.json，只有上方显示“已写入并校验可读”后才能依赖它迁移。重要数据仍建议
+        手动导出一份留存到别处。
       </p>
     </section>
   )

@@ -24,6 +24,7 @@ export default function OcrCapturePanel({
         className="hidden-input"
         type="file"
         accept="image/*"
+        multiple
         onChange={onWebImage}
       />
       <input

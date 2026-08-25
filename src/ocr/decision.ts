@@ -4,12 +4,25 @@ import {
   expenseKey,
   isDuplicateDraft,
   moneyFormatter,
+  truncateRawText,
   type Draft,
   type Expense,
 } from '../expenses.ts'
 import type { OcrDocument, ParsedOcrResult, ParsedTransaction } from './types.ts'
 
 type TransactionWithAmount = ParsedTransaction & { amount: number }
+
+export type OcrBatchCandidate = ParsedTransaction & {
+  selected: boolean
+  documentIndex?: number
+  overlapDuplicate?: boolean
+}
+
+export type OcrDocumentTransactionGroup = {
+  documentIndex: number
+  documentText: string
+  transactions: ParsedTransaction[]
+}
 
 export type OcrReviewDecision = Extract<OcrDecision, { kind: 'review' }>
 
@@ -55,6 +68,60 @@ function normalizedIdentityText(value: string | undefined) {
   return value?.replace(/\s+/g, ' ').trim().toLowerCase() ?? ''
 }
 
+function crossDocumentIdentity(transaction: ParsedTransaction, sourceText: string) {
+  return [
+    transaction.amount?.toFixed(2) ?? '',
+    transaction.date,
+    normalizedIdentityText(transaction.note),
+    transaction.paymentMethod,
+    normalizedIdentityText(sourceText),
+  ].join('\u001f')
+}
+
+/**
+ * Converts separately recognized images into one review batch. Repeated rows inside one image are
+ * preserved because they can be real repeated charges. Across images, matching occurrences are
+ * treated as screenshot overlap and left unselected; the user can still opt them back in when the
+ * transactions really are distinct.
+ */
+export function prepareOcrDocumentBatch(
+  groups: OcrDocumentTransactionGroup[],
+): OcrBatchCandidate[] {
+  const maximumOccurrencesInPreviousDocuments = new Map<string, number>()
+  const candidates: OcrBatchCandidate[] = []
+
+  for (const group of groups) {
+    const occurrencesInDocument = new Map<string, number>()
+    for (const transaction of group.transactions) {
+      if (transaction.amount === null) continue
+      const sourceRow = transaction.sourceRow ?? truncateRawText(group.documentText) ?? ''
+      const identity = crossDocumentIdentity(transaction, sourceRow)
+      const occurrence = (occurrencesInDocument.get(identity) ?? 0) + 1
+      occurrencesInDocument.set(identity, occurrence)
+      const overlapDuplicate =
+        occurrence <= (maximumOccurrencesInPreviousDocuments.get(identity) ?? 0)
+      const isExpense = transaction.direction === 'expense'
+
+      candidates.push({
+        ...transaction,
+        sourceRow,
+        documentIndex: group.documentIndex,
+        overlapDuplicate,
+        selected: isExpense && transaction.warnings.length === 0 && !overlapDuplicate,
+      })
+    }
+
+    for (const [identity, count] of occurrencesInDocument) {
+      maximumOccurrencesInPreviousDocuments.set(
+        identity,
+        Math.max(maximumOccurrencesInPreviousDocuments.get(identity) ?? 0, count),
+      )
+    }
+  }
+
+  return candidates
+}
+
 function matchesOcrSource(expense: Expense, draft: Draft, sourceRow: string | undefined) {
   const normalizedSourceRow = normalizedIdentityText(sourceRow)
   return (
@@ -92,7 +159,7 @@ function hasExistingScreenshotOverlap(
 }
 
 export function reconcileOcrBatchExpenses(
-  transactions: ParsedTransaction[],
+  transactions: Array<ParsedTransaction & { overlapDuplicate?: boolean }>,
   existingExpenses: Expense[],
 ): OcrBatchReconciliation {
   const updatedExpenses = [...existingExpenses]
@@ -102,7 +169,7 @@ export function reconcileOcrBatchExpenses(
   const canRepairDates = hasExistingScreenshotOverlap(transactions, existingExpenses)
 
   for (const transaction of transactions) {
-    if (transaction.amount === null) continue
+    if (transaction.amount === null || transaction.direction !== 'expense') continue
     const draft = draftFromTransaction(transaction)
     const key = draftKey(draft)
     if (key === null) continue

@@ -54,6 +54,7 @@ export type ParsedOcrResult = {
   transactions: ParsedTransaction[]
   isBillList: boolean
   documentConfidence: number
+  truncatedTransactionCount?: number
 }
 
 export type OcrProgressCallback = (progress: number, message: string) => void

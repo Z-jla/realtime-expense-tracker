@@ -1,0 +1,150 @@
+name: Release
+
+# Publishing is driven by a version tag. The signing material lives only in repository secrets,
+# so the released artifact is reproducible from a clean checkout and never depends on whichever
+# debug keystore happens to exist on a developer machine.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          package=$(node -p "require('./package.json').version")
+          if [ "$version" != "$package" ]; then
+            echo "Tag $tag does not match package.json version $package" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint and test
+        run: |
+          npm run lint
+          npm test
+
+      - name: Sync Android project
+        run: npm run android:sync
+
+      - name: Run Android tests and lint
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew compileDebugAndroidTestSources testDebugUnitTest lintDebug --no-daemon --console=plain
+
+      - name: Restore signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SPEND_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "SPEND_RELEASE_KEYSTORE_BASE64 is not configured." >&2
+            echo "Run scripts/create-release-keystore.ps1 and add the four repository secrets." >&2
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Build signed release APK
+        working-directory: android
+        env:
+          SPEND_RELEASE_STORE_FILE: ${{ runner.temp }}/release.jks
+          SPEND_RELEASE_STORE_PASSWORD: ${{ secrets.SPEND_RELEASE_STORE_PASSWORD }}
+          SPEND_RELEASE_KEY_ALIAS: ${{ secrets.SPEND_RELEASE_KEY_ALIAS }}
+          SPEND_RELEASE_KEY_PASSWORD: ${{ secrets.SPEND_RELEASE_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --console=plain
+
+      # A release build that silently fell back to debug signing would be worse than a failure:
+      # it installs fine today and locks users out of updates later.
+      - name: Verify signature is not the debug certificate
+        run: |
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          test -f "$apk"
+          certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk")
+          echo "$certs"
+          if grep -q "CN=Android Debug" <<< "$certs"; then
+            echo "Release APK is signed with the Android debug certificate." >&2
+            exit 1
+          fi
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 "$apk"
+
+          contents=$(unzip -l "$apk")
+          grep -q "lib/arm64-v8a/" <<< "$contents"
+          grep -q "lib/armeabi-v7a/" <<< "$contents"
+          grep -q "assets/models/det/inference.onnx" <<< "$contents"
+          grep -q "assets/models/rec/inference.onnx" <<< "$contents"
+          grep -q "assets/models/rec/inference.yml" <<< "$contents"
+          ! grep -qi "x86" <<< "$contents"
+          ! grep -qi "tesseract" <<< "$contents"
+
+          packages=$("$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" dex packages --defined-only "$apk")
+          grep -Eq '^C .*org\.opencv\.core\.Mat$' <<< "$packages"
+          grep -Eq '^C .*org\.opencv\.imgcodecs\.Imgcodecs$' <<< "$packages"
+          grep -Eq '^C .*com\.paddle\.ocr\.PaddleOCR$' <<< "$packages"
+          grep -Eq '^C .*ai\.onnxruntime\.OrtSession$' <<< "$packages"
+          grep -Eq '^C .*com\.spendapp\.mobile\.PaddleOcrPlugin$' <<< "$packages"
+
+      - name: Stage artifact
+        id: artifact
+        run: |
+          name="realtime-expense-tracker-v${{ steps.version.outputs.version }}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          sha256sum "$name" | tee "$name.sha256"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "${{ steps.artifact.outputs.name }}" \
+            "${{ steps.artifact.outputs.name }}.sha256" \
+            --title "实时记账 ${{ steps.version.outputs.tag }}" \
+            --generate-notes \
+            --verify-tag \
+            || gh release upload "${{ steps.version.outputs.tag }}" \
+              "${{ steps.artifact.outputs.name }}" \
+              "${{ steps.artifact.outputs.name }}.sha256" \
+              --clobber
